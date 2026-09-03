@@ -82,9 +82,12 @@ That's intentional — the whole point of this project is that it never pretends
 
 ## Guide 2 — "I want to run a device through the real flow myself"
 
-This is a terminal-and-testnet-wallets job, not a browser-click job — there's no "register my
-device" button in the UI yet. You'll be running the same scripts that produced the NODE-001 run
-above, against your own device label and your own wallets.
+Registering your own device now has a browser option — see **Guide 2a** below. But reporting
+activity and proving it happened is still a terminal-and-testnet-wallets job: there's no
+"report activity" or "submit proof" button in the UI, on purpose — those are the steps that
+actually talk to Attestcoin's attestor set, and doing that from a server-side click would mean
+someone other than the device holding the private key that signs it. You'll be running the same
+scripts that produced the NODE-001 run above, against your own device label and your own wallets.
 
 You'll need:
 - Node.js 20+, [Foundry](https://getfoundry.sh/) (`forge`, `cast`)
@@ -92,6 +95,25 @@ You'll need:
 - A Creditcoin CC3 Testnet wallet funded with testnet CTC
 - About 10–20 minutes of waiting during step 4 — that's how long Attestcoin's attestor set takes
   to reach consensus on your Sepolia block. It's not a bug, it's the actual security mechanism.
+
+### Guide 2a — Register through the dashboard instead of the CLI
+
+Open **Register a device** in the dashboard nav, connect a Sepolia wallet, and pick a label.
+Two things happen, and only the first one needs your wallet:
+
+1. Your wallet signs `registerDevice(deviceId)` directly against `NodraDeviceRegistry` on Sepolia
+   — permissionless, nobody approves it, Nodra never sees or needs your private key.
+2. Registering a device on the Creditcoin side (so it has somewhere to receive rewards) is
+   `onlyOwner` on `NodraIncentiveController`, by design — it's what stops a stranger from
+   squatting on your device id and redirecting your rewards to themselves. Once your Sepolia
+   transaction confirms, the dashboard's server independently re-checks that transaction on-chain
+   and completes the Creditcoin side for you automatically — no manual approval step, and it
+   trusts nothing from your browser except the transaction hash.
+
+If a deployment hasn't configured that server-side step, step 1 still succeeds on its own and the
+project owner can finish step 2 manually. Either way, you still need Guide 2's CLI for reporting
+activity and proving it — registration only gets a device onto both chains, it doesn't make up
+work for it to have done.
 
 ### 1. Clone and install
 
@@ -125,7 +147,8 @@ npm run nodra:check_setup
 npm run nodra:register_device -- MY-DEVICE-001
 ```
 
-This registers `MY-DEVICE-001` on both Sepolia and Creditcoin in one step.
+This registers `MY-DEVICE-001` on both Sepolia and Creditcoin in one step. (Prefer a browser?
+Guide 2a above does the same thing through the dashboard — skip this step if you used that.)
 
 ### 4. Report activity, then prove it happened
 
