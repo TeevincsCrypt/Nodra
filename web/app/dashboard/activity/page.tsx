@@ -3,19 +3,22 @@ import Link from 'next/link';
 import { TransactionHash } from '@/components/hash';
 import { SectionHeading } from '@/components/metrics';
 import { EmptyState, Panel, ProvenanceTag, StatusBadge } from '@/components/primitives';
-import { SETTLEMENTS } from '@/lib/data';
+import { getLiveDashboardData } from '@/lib/server/live-data';
 import { explorerUrl, formatNumber, formatWei } from '@/lib/format';
 import { NETWORKS } from '@/lib/protocol';
 
 export const metadata = { title: 'Activity — Nodra' };
+export const revalidate = 30;
 
-export default function ActivityPage() {
+export default async function ActivityPage() {
+  const { settlements: SETTLEMENTS } = await getLiveDashboardData();
+
   return (
     <div className="mx-auto max-w-6xl">
       <SectionHeading
         title="Activity"
         description="Every unit of work that has passed through verification and settled."
-        action={<ProvenanceTag provenance="recorded" />}
+        action={<ProvenanceTag provenance={SETTLEMENTS[0]?.provenance ?? 'recorded'} />}
       />
 
       {SETTLEMENTS.length === 0 ? (

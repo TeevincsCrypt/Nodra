@@ -43,6 +43,13 @@ export interface Settlement {
   rewardOperator: string;
   proof: ProofDetail;
   provenance: Provenance;
+  /**
+   * Optional live cross-checks (undefined when not yet checked, or when the relevant RPC
+   * was unavailable). This never regenerates the proof — it only confirms the same
+   * recorded transaction hash still resolves on-chain to the same block and status.
+   */
+  sourceConfirmedLive?: boolean;
+  settlementConfirmedLive?: boolean;
 }
 
 export interface Device {

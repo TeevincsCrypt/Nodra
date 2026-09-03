@@ -12,7 +12,9 @@
   "dependencies": {
     "next": "15.5.25",
     "react": "19.1.1",
-    "react-dom": "19.1.1"
+    "react-dom": "19.1.1",
+    "ethers": "^6.13.4",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@types/node": "22.10.2",

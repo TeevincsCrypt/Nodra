@@ -4,13 +4,18 @@ import { notFound } from 'next/navigation';
 import { DataRow, TransactionHash } from '@/components/hash';
 import { ProofTimeline, type TimelineStep } from '@/components/proof-timeline';
 import { Panel, PanelHeader, ProvenanceTag, StatusBadge } from '@/components/primitives';
-import { DEVICES, getDevice, getSettlementsForDevice } from '@/lib/data';
+import { DEVICES } from '@/lib/data';
+import { getLiveDashboardData } from '@/lib/server/live-data';
 import { explorerUrl, formatNumber, formatWei, weiToCtc } from '@/lib/format';
 import { CONTRACTS, NETWORKS } from '@/lib/protocol';
 
+// Route generation only — the recorded device list, not a live read. Which devices EXIST
+// is a deployment-time decision, unrelated to whether their data renders live.
 export function generateStaticParams() {
   return DEVICES.map((device) => ({ deviceId: device.label }));
 }
+
+export const revalidate = 30;
 
 export default async function DeviceDetailPage({
   params,
@@ -18,10 +23,13 @@ export default async function DeviceDetailPage({
   params: Promise<{ deviceId: string }>;
 }) {
   const { deviceId } = await params;
-  const device = getDevice(decodeURIComponent(deviceId));
+  const label = decodeURIComponent(deviceId);
+
+  const { devices, settlements: allSettlements } = await getLiveDashboardData();
+  const device = devices.find((d) => d.label.toLowerCase() === label.toLowerCase());
   if (!device) notFound();
 
-  const settlements = getSettlementsForDevice(device.id);
+  const settlements = allSettlements.filter((s) => s.deviceId === device.id);
   const latest = settlements[0];
 
   const journey: TimelineStep[] = latest
@@ -81,7 +89,11 @@ export default async function DeviceDetailPage({
             <h1 className="font-mono text-2xl font-semibold tracking-tight text-ink-primary">
               {device.label}
             </h1>
-            <StatusBadge label="Active" tone="ok" pulse />
+            <StatusBadge
+              label={device.status === 'active' ? 'Active' : 'Idle'}
+              tone={device.status === 'active' ? 'ok' : 'muted'}
+              pulse={device.status === 'active'}
+            />
           </div>
           <div className="mt-2 flex items-center gap-2">
             <span className="text-xs text-ink-muted">Device ID</span>
@@ -162,13 +174,19 @@ export default async function DeviceDetailPage({
             <div className="p-5">
               <dl>
                 <DataRow label="Source chain">
-                  <span className="text-ok">Confirmed</span>
+                  <span className="flex items-center gap-2">
+                    <span className="text-ok">Confirmed</span>
+                    <ProvenanceTag provenance={latest?.sourceConfirmedLive ? 'live' : 'recorded'} />
+                  </span>
                 </DataRow>
                 <DataRow label="Attestation">
                   <span className="text-ok">Verified</span>
                 </DataRow>
                 <DataRow label="Destination">
-                  <span className="text-ok">Settled</span>
+                  <span className="flex items-center gap-2">
+                    <span className="text-ok">Settled</span>
+                    <ProvenanceTag provenance={latest?.settlementConfirmedLive ? 'live' : 'recorded'} />
+                  </span>
                 </DataRow>
                 <DataRow label="Operator (source)">
                   <TransactionHash value={device.sourceOperator} lead={6} tail={4} />

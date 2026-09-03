@@ -2,14 +2,15 @@ import { DataRow, TransactionHash } from '@/components/hash';
 import { SectionHeading } from '@/components/metrics';
 import { ProofTimeline, type TimelineStep } from '@/components/proof-timeline';
 import { EmptyState, Panel, PanelHeader, ProvenanceTag, StatusBadge } from '@/components/primitives';
-import { SETTLEMENTS } from '@/lib/data';
+import { getLiveDashboardData } from '@/lib/server/live-data';
 import { explorerUrl, formatNumber, formatWei } from '@/lib/format';
 import { CONTRACTS, NETWORKS, SOURCE_CHAIN_KEY } from '@/lib/protocol';
 
 export const metadata = { title: 'Proofs — Nodra' };
+export const revalidate = 30;
 
-export default function ProofsPage() {
-  const proofs = SETTLEMENTS;
+export default async function ProofsPage() {
+  const { settlements: proofs } = await getLiveDashboardData();
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -19,7 +20,7 @@ export default function ProofsPage() {
         action={
           <div className="flex items-center gap-2">
             <StatusBadge label={`${proofs.length} verified`} tone="ok" />
-            <ProvenanceTag provenance="recorded" />
+            <ProvenanceTag provenance={proofs[0]?.provenance ?? 'recorded'} />
           </div>
         }
       />
@@ -120,6 +121,9 @@ export default function ProofsPage() {
                       </svg>
                       <span className="text-sm font-medium text-ok">Verified</span>
                     </div>
+                    <div className="mt-1.5">
+                      <ProvenanceTag provenance={proof.sourceConfirmedLive ? 'live' : 'recorded'} />
+                    </div>
                   </div>
                   <div className="bg-card p-5">
                     <span className="label-xs">Creditcoin</span>
@@ -128,6 +132,9 @@ export default function ProofsPage() {
                         <path d="M3 8.5l3.2 3.2L13 5" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
                       <span className="text-sm font-medium text-ok">Settled</span>
+                    </div>
+                    <div className="mt-1.5">
+                      <ProvenanceTag provenance={proof.settlementConfirmedLive ? 'live' : 'recorded'} />
                     </div>
                   </div>
                 </div>

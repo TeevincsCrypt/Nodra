@@ -1,11 +1,13 @@
 import { DataRow, TransactionHash } from '@/components/hash';
 import { SectionHeading } from '@/components/metrics';
-import { CheckLine, Panel, PanelHeader, StatusBadge } from '@/components/primitives';
+import { CheckLine, Panel, PanelHeader, ProvenanceTag, StatusBadge } from '@/components/primitives';
+import { getLiveDashboardData } from '@/lib/server/live-data';
 import { formatWei } from '@/lib/format';
 import { explorerUrl } from '@/lib/format';
 import { CONTRACTS, NETWORKS, REWARD, SECURITY_PROPERTIES, SOURCE_CHAIN_KEY } from '@/lib/protocol';
 
 export const metadata = { title: 'Protocol — Nodra' };
+export const revalidate = 30;
 
 const CONTRACT_LIST = [
   { ...CONTRACTS.deviceRegistry, network: 'sepolia' as const },
@@ -13,7 +15,9 @@ const CONTRACT_LIST = [
   { ...CONTRACTS.attestcoinVerifier, network: 'creditcoin' as const },
 ];
 
-export default function ProtocolPage() {
+export default async function ProtocolPage() {
+  const { protocolState } = await getLiveDashboardData();
+
   return (
     <div className="mx-auto max-w-6xl">
       <SectionHeading
@@ -50,6 +54,64 @@ export default function ProtocolPage() {
             </li>
           ))}
         </ul>
+      </Panel>
+
+      {/* Live contract state */}
+      <Panel className="mt-6 overflow-hidden">
+        <PanelHeader
+          title="Live contract state"
+          meta="Read directly from NodraIncentiveController on Creditcoin"
+          action={<ProvenanceTag provenance={protocolState.provenance} />}
+        />
+        <div className="p-5">
+          <dl>
+            <DataRow label="Owner">
+              {protocolState.owner ? (
+                <TransactionHash
+                  value={protocolState.owner}
+                  href={explorerUrl('creditcoin', 'address', protocolState.owner)}
+                  lead={8}
+                  tail={6}
+                />
+              ) : (
+                <span className="text-ink-faint">unavailable</span>
+              )}
+            </DataRow>
+            <DataRow label="Paused">
+              {protocolState.paused === undefined ? (
+                <span className="text-ink-faint">unavailable</span>
+              ) : (
+                <StatusBadge
+                  label={protocolState.paused ? 'Paused' : 'Not paused'}
+                  tone={protocolState.paused ? 'danger' : 'ok'}
+                />
+              )}
+            </DataRow>
+            <DataRow label="Reward rate per unit" mono>
+              {protocolState.rewardRatePerUnitWei !== undefined
+                ? `${formatWei(protocolState.rewardRatePerUnitWei)} wei`
+                : 'unavailable'}
+            </DataRow>
+            <DataRow label="Source device registry">
+              {protocolState.sourceDeviceRegistry ? (
+                <TransactionHash
+                  value={protocolState.sourceDeviceRegistry}
+                  href={explorerUrl('sepolia', 'address', protocolState.sourceDeviceRegistry)}
+                  lead={8}
+                  tail={6}
+                />
+              ) : (
+                <span className="text-ink-faint">unavailable</span>
+              )}
+            </DataRow>
+          </dl>
+          {protocolState.provenance === 'recorded' ? (
+            <p className="mt-3 text-2xs leading-relaxed text-ink-faint">
+              Live read from Creditcoin was unavailable this request, so this section could not be
+              refreshed. It will retry automatically on the next revalidation.
+            </p>
+          ) : null}
+        </div>
       </Panel>
 
       <div className="mt-6 grid items-start gap-4 lg:grid-cols-2">

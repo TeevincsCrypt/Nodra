@@ -4,67 +4,75 @@ import { TransactionHash } from '@/components/hash';
 import { MetricCard } from '@/components/metrics';
 import { NetworkPipeline, type Stage } from '@/components/pipeline';
 import { Panel, PanelHeader, StatusBadge } from '@/components/primitives';
-import { DEVICES, RECORDED_SETTLEMENT, getTotals } from '@/lib/data';
+import { RECORDED_SETTLEMENT, type Settlement } from '@/lib/data';
+import { getLiveDashboardData } from '@/lib/server/live-data';
 import { compactWei, explorerUrl, formatNumber, formatWei, weiToCtc } from '@/lib/format';
 import { CONTRACTS, NETWORKS, SOURCE_CHAIN_KEY } from '@/lib/protocol';
 
 export const metadata = { title: 'Overview — Nodra' };
 
-const settlement = RECORDED_SETTLEMENT;
+// Bakes the page at build time, then regenerates in the background at most every 30s —
+// live enough to feel current without hammering the RPC endpoints on every request.
+export const revalidate = 30;
 
-const STAGES: Stage[] = [
-  {
-    key: 'source',
-    label: 'Source',
-    network: NETWORKS.sepolia.label,
-    detail: 'Device reports measurable work as an on-chain event.',
-    meta: [
-      { label: 'Contract', value: CONTRACTS.deviceRegistry.address },
-      { label: 'Chain ID', value: String(NETWORKS.sepolia.chainId) },
-      { label: 'Block', value: formatNumber(settlement.sourceBlock) },
-      { label: 'Event', value: 'DeviceActivityReported' },
-    ],
-  },
-  {
-    key: 'attestation',
-    label: 'Attestation',
-    network: 'Attestcoin',
-    detail: 'Independent attestors reach consensus on the source block.',
-    meta: [
-      { label: 'Chain key', value: String(SOURCE_CHAIN_KEY) },
-      { label: 'Header number', value: formatNumber(settlement.proof.headerNumber) },
-      { label: 'Merkle siblings', value: String(settlement.proof.merkleSiblings) },
-      { label: 'Continuity roots', value: String(settlement.proof.continuityRoots) },
-    ],
-  },
-  {
-    key: 'destination',
-    label: 'Destination',
-    network: NETWORKS.creditcoin.label,
-    detail: 'The 0xFD2 precompile verifies inclusion and continuity.',
-    meta: [
-      { label: 'Verifier', value: CONTRACTS.attestcoinVerifier.address },
-      { label: 'Chain ID', value: String(NETWORKS.creditcoin.chainId) },
-      { label: 'Block', value: formatNumber(settlement.settlementBlock) },
-      { label: 'Tx index', value: String(settlement.proof.transactionIndex) },
-    ],
-  },
-  {
-    key: 'incentive',
-    label: 'Incentive',
-    network: 'Nodra',
-    detail: 'Reward accrues only after verification succeeds.',
-    meta: [
-      { label: 'Controller', value: CONTRACTS.incentiveController.address },
-      { label: 'Rate', value: '1e12 wei / unit' },
-      { label: 'Units', value: formatNumber(settlement.activityUnits) },
-      { label: 'Reward', value: `${formatWei(settlement.rewardWei)} wei` },
-    ],
-  },
-];
+function buildStages(settlement: Settlement): Stage[] {
+  return [
+    {
+      key: 'source',
+      label: 'Source',
+      network: NETWORKS.sepolia.label,
+      detail: 'Device reports measurable work as an on-chain event.',
+      meta: [
+        { label: 'Contract', value: CONTRACTS.deviceRegistry.address },
+        { label: 'Chain ID', value: String(NETWORKS.sepolia.chainId) },
+        { label: 'Block', value: formatNumber(settlement.sourceBlock) },
+        { label: 'Event', value: 'DeviceActivityReported' },
+      ],
+    },
+    {
+      key: 'attestation',
+      label: 'Attestation',
+      network: 'Attestcoin',
+      detail: 'Independent attestors reach consensus on the source block.',
+      meta: [
+        { label: 'Chain key', value: String(SOURCE_CHAIN_KEY) },
+        { label: 'Header number', value: formatNumber(settlement.proof.headerNumber) },
+        { label: 'Merkle siblings', value: String(settlement.proof.merkleSiblings) },
+        { label: 'Continuity roots', value: String(settlement.proof.continuityRoots) },
+      ],
+    },
+    {
+      key: 'destination',
+      label: 'Destination',
+      network: NETWORKS.creditcoin.label,
+      detail: 'The 0xFD2 precompile verifies inclusion and continuity.',
+      meta: [
+        { label: 'Verifier', value: CONTRACTS.attestcoinVerifier.address },
+        { label: 'Chain ID', value: String(NETWORKS.creditcoin.chainId) },
+        { label: 'Block', value: formatNumber(settlement.settlementBlock) },
+        { label: 'Tx index', value: String(settlement.proof.transactionIndex) },
+      ],
+    },
+    {
+      key: 'incentive',
+      label: 'Incentive',
+      network: 'Nodra',
+      detail: 'Reward accrues only after verification succeeds.',
+      meta: [
+        { label: 'Controller', value: CONTRACTS.incentiveController.address },
+        { label: 'Rate', value: '1e12 wei / unit' },
+        { label: 'Units', value: formatNumber(settlement.activityUnits) },
+        { label: 'Reward', value: `${formatWei(settlement.rewardWei)} wei` },
+      ],
+    },
+  ];
+}
 
-export default function OverviewPage() {
-  const totals = getTotals();
+export default async function OverviewPage() {
+  const { devices, settlements, totals, degraded } = await getLiveDashboardData();
+  const settlement = settlements[0] ?? RECORDED_SETTLEMENT;
+  const stages = buildStages(settlement);
+  const metricsLive = !degraded.creditcoin;
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -85,13 +93,13 @@ export default function OverviewPage() {
           value={formatNumber(totals.totalActivityUnits)}
           unit="units"
           sublabel="Verified work reported"
-          provenance="recorded"
+          provenance={metricsLive ? 'live' : 'recorded'}
         />
         <MetricCard
           label="Proofs"
           value={formatNumber(totals.verifiedProofs)}
           sublabel="Verified through Attestcoin"
-          provenance="recorded"
+          provenance={metricsLive ? 'live' : 'recorded'}
         />
         <MetricCard
           label="Rewards"
@@ -103,13 +111,19 @@ export default function OverviewPage() {
         />
       </div>
 
+      {degraded.source || degraded.creditcoin ? (
+        <p className="mt-3 text-2xs leading-relaxed text-ink-faint">
+          Live reads from {degraded.source && degraded.creditcoin ? 'Sepolia and Creditcoin' : degraded.source ? 'Sepolia' : 'Creditcoin'} were unavailable this request — showing the verified recorded settlement instead.
+        </p>
+      ) : null}
+
       <Panel className="mt-6 overflow-hidden">
         <PanelHeader
           title="Settlement path"
           meta="Select a stage for its technical detail"
           action={<StatusBadge label="Operational" tone="ok" pulse />}
         />
-        <NetworkPipeline stages={STAGES} />
+        <NetworkPipeline stages={stages} />
       </Panel>
 
       <div className="mt-6 grid items-start gap-4 lg:grid-cols-2">
@@ -126,7 +140,7 @@ export default function OverviewPage() {
             }
           />
           <ul className="divide-y divide-line">
-            {DEVICES.map((device) => (
+            {devices.map((device) => (
               <li key={device.id}>
                 <Link
                   href={`/dashboard/devices/${device.label}`}
@@ -135,7 +149,10 @@ export default function OverviewPage() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-sm text-ink-primary">{device.label}</span>
-                      <StatusBadge label="Active" tone="ok" />
+                      <StatusBadge
+                        label={device.status === 'active' ? 'Active' : 'Idle'}
+                        tone={device.status === 'active' ? 'ok' : 'muted'}
+                      />
                     </div>
                     <div className="mt-1 text-xs text-ink-muted">
                       {device.kind} · {NETWORKS[device.sourceNetwork].label}

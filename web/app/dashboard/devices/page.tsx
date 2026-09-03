@@ -2,14 +2,17 @@ import Link from 'next/link';
 
 import { TransactionHash } from '@/components/hash';
 import { SectionHeading } from '@/components/metrics';
-import { ButtonLink, EmptyState, Panel, StatusBadge } from '@/components/primitives';
-import { DEVICES } from '@/lib/data';
+import { ButtonLink, EmptyState, Panel, ProvenanceTag, StatusBadge } from '@/components/primitives';
+import { getLiveDashboardData } from '@/lib/server/live-data';
 import { formatNumber } from '@/lib/format';
 import { NETWORKS } from '@/lib/protocol';
 
 export const metadata = { title: 'Devices — Nodra' };
+export const revalidate = 30;
 
-export default function DevicesPage() {
+export default async function DevicesPage() {
+  const { devices } = await getLiveDashboardData();
+
   return (
     <div className="mx-auto max-w-6xl">
       <SectionHeading
@@ -17,7 +20,7 @@ export default function DevicesPage() {
         description="Physical infrastructure registered to report verifiable work."
       />
 
-      {DEVICES.length === 0 ? (
+      {devices.length === 0 ? (
         <Panel>
           <EmptyState
             title="No devices registered"
@@ -26,14 +29,21 @@ export default function DevicesPage() {
         </Panel>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
-          {DEVICES.map((device) => (
+          {devices.map((device) => (
             <Panel key={device.id} className="flex flex-col p-5 panel-hover">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="font-mono text-base font-medium text-ink-primary">{device.label}</div>
                   <div className="mt-1 text-xs text-ink-muted">{device.kind}</div>
                 </div>
-                <StatusBadge label="Active" tone="ok" pulse />
+                <div className="flex items-center gap-2">
+                  <ProvenanceTag provenance={device.provenance} />
+                  <StatusBadge
+                    label={device.status === 'active' ? 'Active' : 'Idle'}
+                    tone={device.status === 'active' ? 'ok' : 'muted'}
+                    pulse={device.status === 'active'}
+                  />
+                </div>
               </div>
 
               <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-3">

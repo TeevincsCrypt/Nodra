@@ -3,15 +3,15 @@ import Link from 'next/link';
 import { TransactionHash } from '@/components/hash';
 import { SectionHeading } from '@/components/metrics';
 import { EmptyState, Panel, PanelHeader, ProvenanceTag, StatusBadge } from '@/components/primitives';
-import { SETTLEMENTS, getRewardAccounts, getTotals } from '@/lib/data';
+import { getLiveDashboardData } from '@/lib/server/live-data';
 import { explorerUrl, formatNumber, formatWei, weiToCtc } from '@/lib/format';
 import { REWARD } from '@/lib/protocol';
 
 export const metadata = { title: 'Rewards — Nodra' };
+export const revalidate = 30;
 
-export default function RewardsPage() {
-  const totals = getTotals();
-  const accounts = getRewardAccounts();
+export default async function RewardsPage() {
+  const { settlements: SETTLEMENTS, totals, rewardAccounts: accounts } = await getLiveDashboardData();
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -96,7 +96,10 @@ export default function RewardsPage() {
             <ul className="divide-y divide-line">
               {accounts.map((account) => (
                 <li key={account.operator} className="p-5">
-                  <span className="label-xs">Operator</span>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="label-xs">Operator</span>
+                    <ProvenanceTag provenance={account.provenance} />
+                  </div>
                   <div className="mt-2">
                     <TransactionHash
                       value={account.operator}
