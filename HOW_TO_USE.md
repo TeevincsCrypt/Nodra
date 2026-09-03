@@ -50,8 +50,8 @@ wei of testnet CTC. Every hash below is real and checkable:
 You don't need a wallet, an account, or any testnet funds. The dashboard is **read-only by
 design** — there is nothing to click that spends anything or breaks anything.
 
-1. Open the dashboard: **`<your Vercel deployment URL>`**
-   *(fill this in once you know it — see "Where things live" below for why it isn't printed here)*
+1. Open the dashboard: https://nodractc.vercel.app
+  
 2. **Overview** — the front page of the app. At the top: the whole NODE-001 → reward story as one
    vertical checklist. Below that: network totals and the settlement pipeline.
 3. **Devices → NODE-001** — the device's identity: its ID, who operates it on each chain, how many
