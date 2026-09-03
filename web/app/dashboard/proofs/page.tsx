@@ -175,6 +175,12 @@ export default async function ProofsPage() {
                           showCopy={false}
                         />
                       </DataRow>
+                      <DataRow label="Query ID">
+                        <span className="flex items-center gap-2">
+                          <TransactionHash value={proof.queryId} lead={10} tail={4} showCopy />
+                          <ProvenanceTag provenance={proof.queryIdConfirmedLive ? 'live' : 'recorded'} />
+                        </span>
+                      </DataRow>
                     </dl>
 
                     <div className="mt-5 rounded-md border border-blue-500/25 bg-blue-500/[0.05] p-4">

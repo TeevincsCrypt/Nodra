@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-import { cn } from './primitives';
+import { cn, ProvenanceTag } from './primitives';
 
 export interface Stage {
   key: string;
@@ -64,6 +64,82 @@ export function HeroPipeline() {
         })}
       </ol>
     </div>
+  );
+}
+
+/* ---------------------------------------------------------- Full journey (Overview) */
+
+export interface JourneyStep {
+  key: string;
+  title: string;
+  subtitle: string;
+  complete: boolean;
+  provenance?: 'live' | 'recorded' | 'derived';
+  evidence?: React.ReactNode;
+}
+
+/**
+ * The complete NODE-001 -> reward story, one row per stage, in the order it actually
+ * happens. Each stage carries its own truthful provenance rather than one blanket tag for
+ * the whole pipeline, since some stages (a live eth_call) and others (the Attestcoin
+ * attestation itself, which no contract exposes to query) are necessarily recorded.
+ */
+export function JourneyPipeline({ steps }: { steps: JourneyStep[] }) {
+  return (
+    <ol className="relative">
+      {steps.map((step, index) => {
+        const isLast = index === steps.length - 1;
+        return (
+          <li key={step.key} className="relative">
+            <div
+              className={cn(
+                'flex items-start gap-4 rounded-lg border px-4 py-3.5 transition-colors duration-200 animate-rise',
+                step.complete
+                  ? 'border-line bg-raised/50'
+                  : 'border-line bg-raised/20',
+              )}
+              style={{ animationDelay: `${index * 70}ms` }}
+            >
+              <span
+                className={cn(
+                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-md border font-mono text-2xs',
+                  step.complete
+                    ? 'border-ok/40 bg-ok/12 text-ok'
+                    : 'border-line-strong bg-raised text-ink-muted',
+                )}
+                aria-hidden="true"
+              >
+                {step.complete ? (
+                  <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M3 8.5l3.2 3.2L13 5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                ) : (
+                  String(index + 1).padStart(2, '0')
+                )}
+              </span>
+
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                  <span className="text-sm font-medium text-ink-primary">{step.title}</span>
+                  {step.provenance ? <ProvenanceTag provenance={step.provenance} /> : null}
+                </div>
+                <div className="mt-0.5 text-xs leading-relaxed text-ink-muted">{step.subtitle}</div>
+                {step.evidence ? <div className="mt-2">{step.evidence}</div> : null}
+              </div>
+            </div>
+
+            {!isLast ? (
+              <div className="relative ml-4 h-5 w-px overflow-hidden bg-line-strong" aria-hidden="true">
+                <span
+                  className="absolute inset-x-0 top-0 h-2 w-px bg-blue-400 animate-flow-y"
+                  style={{ animationDelay: `${index * 0.4}s` }}
+                />
+              </div>
+            ) : null}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 

@@ -173,6 +173,19 @@ export default async function DeviceDetailPage({
             <PanelHeader title="Status" />
             <div className="p-5">
               <dl>
+                {device.registrationTxHash ? (
+                  <DataRow label="Registration">
+                    <span className="flex items-center gap-2">
+                      <TransactionHash
+                        value={device.registrationTxHash}
+                        href={explorerUrl('sepolia', 'tx', device.registrationTxHash)}
+                        lead={6}
+                        tail={4}
+                      />
+                      <ProvenanceTag provenance={device.registrationConfirmedLive ? 'live' : 'recorded'} />
+                    </span>
+                  </DataRow>
+                ) : null}
                 <DataRow label="Source chain">
                   <span className="flex items-center gap-2">
                     <span className="text-ok">Confirmed</span>

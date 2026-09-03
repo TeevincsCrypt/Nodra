@@ -42,6 +42,8 @@ export interface Settlement {
   sourceOperator: string;
   rewardOperator: string;
   proof: ProofDetail;
+  /** The queryId ASCBase computed for this proof: keccak(chainKey, blockHeight, txIndex). */
+  queryId: string;
   provenance: Provenance;
   /**
    * Optional live cross-checks (undefined when not yet checked, or when the relevant RPC
@@ -50,6 +52,8 @@ export interface Settlement {
    */
   sourceConfirmedLive?: boolean;
   settlementConfirmedLive?: boolean;
+  /** True when a live-fetched ActivitySettled log's queryId matches the recorded one. */
+  queryIdConfirmedLive?: boolean;
 }
 
 export interface Device {
@@ -64,6 +68,10 @@ export interface Device {
   sessions: number;
   lastSessionId: number | null;
   provenance: Provenance;
+  /** Sepolia transaction that registered this device, if known. */
+  registrationTxHash?: string;
+  /** True when a live-fetched DeviceRegistered log confirms the recorded registration. */
+  registrationConfirmedLive?: boolean;
 }
 
 /**
@@ -91,6 +99,7 @@ export const RECORDED_SETTLEMENT: Settlement = {
     merkleSiblings: 8,
     continuityRoots: 1,
   },
+  queryId: '0xcf4a2e24ea675278a3f30d2a4438b35596144ec1264549e399e061af6cb24f2c',
   provenance: 'recorded',
 };
 
@@ -107,6 +116,7 @@ export const DEVICES: Device[] = [
     sessions: 1,
     lastSessionId: RECORDED_SETTLEMENT.sessionId,
     provenance: 'recorded',
+    registrationTxHash: '0xedbea57c6b71f9914fd8100c4977b07ad8e498f2a7436630dcc7c2fab4ef6cbd',
   },
 ];
 

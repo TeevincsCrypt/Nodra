@@ -13,6 +13,7 @@ export const DEVICE_REGISTRY_ABI = [
   'function deviceOperator(bytes32 deviceId) external view returns (address)',
   'function nextSessionId(bytes32 deviceId) external view returns (uint256)',
   'event DeviceActivityReported(bytes32 indexed deviceId, uint256 indexed sessionId, uint256 activityUnits)',
+  'event DeviceRegistered(bytes32 indexed deviceId, address indexed operator)',
 ] as const;
 
 /** contracts/sol/NodraIncentiveController.sol (Creditcoin), including inherited Ownable/Pausable */

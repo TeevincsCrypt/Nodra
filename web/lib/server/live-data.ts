@@ -87,6 +87,7 @@ function mapDevice(recorded: Device, snapshot: LiveChainSnapshot): Device {
     sessions: liveSessions ?? recorded.sessions,
     lastSessionId: liveSessions !== undefined ? (liveSessions > 0 ? liveSessions - 1 : null) : recorded.lastSessionId,
     provenance: liveIdentity && liveUnits !== undefined ? 'live' : 'recorded',
+    registrationConfirmedLive: source.registrationConfirmedLive,
   };
 }
 
@@ -94,12 +95,14 @@ function mapDevice(recorded: Device, snapshot: LiveChainSnapshot): Device {
  *  design; we only attach a live cross-check confirming the same hash still resolves
  *  on-chain, never a re-derived or regenerated proof. */
 function mapSettlement(recorded: Settlement, snapshot: LiveChainSnapshot): Settlement {
+  const liveQueryId = snapshot.creditcoin.recordedQueryId;
   return {
     ...recorded,
     // provenance intentionally stays 'recorded': this is the historical proof this
     // dashboard exists to display, not a value we re-derive on every request.
     sourceConfirmedLive: snapshot.source.recordedTxConfirmed,
     settlementConfirmedLive: snapshot.creditcoin.recordedTxConfirmed,
+    queryIdConfirmedLive: liveQueryId ? liveQueryId.toLowerCase() === recorded.queryId.toLowerCase() : undefined,
   };
 }
 

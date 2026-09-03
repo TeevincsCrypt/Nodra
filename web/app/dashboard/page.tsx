@@ -2,9 +2,9 @@ import Link from 'next/link';
 
 import { TransactionHash } from '@/components/hash';
 import { MetricCard } from '@/components/metrics';
-import { NetworkPipeline, type Stage } from '@/components/pipeline';
-import { Panel, PanelHeader, StatusBadge } from '@/components/primitives';
-import { RECORDED_SETTLEMENT, type Settlement } from '@/lib/data';
+import { JourneyPipeline, NetworkPipeline, type JourneyStep, type Stage } from '@/components/pipeline';
+import { Panel, PanelHeader, ProvenanceTag, StatusBadge } from '@/components/primitives';
+import { RECORDED_SETTLEMENT, type Device, type RewardAccount, type Settlement } from '@/lib/data';
 import { getLiveDashboardData } from '@/lib/server/live-data';
 import { compactWei, explorerUrl, formatNumber, formatWei, weiToCtc } from '@/lib/format';
 import { CONTRACTS, NETWORKS, SOURCE_CHAIN_KEY } from '@/lib/protocol';
@@ -14,6 +14,81 @@ export const metadata = { title: 'Overview — Nodra' };
 // Bakes the page at build time, then regenerates in the background at most every 30s —
 // live enough to feel current without hammering the RPC endpoints on every request.
 export const revalidate = 30;
+
+function buildJourney(device: Device, settlement: Settlement, rewardAccount: RewardAccount | undefined): JourneyStep[] {
+  return [
+    {
+      key: 'device',
+      title: device.label,
+      subtitle: 'Registered infrastructure reporting verifiable work.',
+      complete: device.status === 'active',
+      provenance: device.provenance,
+    },
+    {
+      key: 'registry',
+      title: 'Sepolia Device Registry',
+      subtitle: device.registrationTxHash
+        ? 'Device registration confirmed on-chain.'
+        : 'No recorded registration transaction.',
+      complete: Boolean(device.registrationTxHash),
+      provenance: device.registrationTxHash
+        ? device.registrationConfirmedLive
+          ? 'live'
+          : 'recorded'
+        : undefined,
+      evidence: device.registrationTxHash ? (
+        <TransactionHash
+          value={device.registrationTxHash}
+          href={explorerUrl('sepolia', 'tx', device.registrationTxHash)}
+        />
+      ) : undefined,
+    },
+    {
+      key: 'activity',
+      title: 'Device Activity',
+      subtitle: `${formatNumber(settlement.activityUnits)} units reported as session #${settlement.sessionId}.`,
+      complete: true,
+      provenance: settlement.sourceConfirmedLive ? 'live' : 'recorded',
+      evidence: (
+        <TransactionHash value={settlement.sourceTxHash} href={explorerUrl('sepolia', 'tx', settlement.sourceTxHash)} />
+      ),
+    },
+    {
+      key: 'attestation',
+      title: 'Attestcoin Verification',
+      subtitle: `Independent attestors reached consensus on Sepolia block ${formatNumber(settlement.sourceBlock)}.`,
+      complete: true,
+      provenance: 'recorded',
+    },
+    {
+      key: 'proof',
+      title: 'Proof',
+      subtitle: `Merkle inclusion (${settlement.proof.merkleSiblings} siblings) + continuity proof generated.`,
+      complete: true,
+      provenance: 'recorded',
+    },
+    {
+      key: 'controller',
+      title: 'Creditcoin Incentive Controller',
+      subtitle: 'Verified via the native query verifier precompile at 0xFD2.',
+      complete: true,
+      provenance: settlement.settlementConfirmedLive ? 'live' : 'recorded',
+      evidence: (
+        <TransactionHash
+          value={settlement.settlementTxHash}
+          href={explorerUrl('creditcoin', 'tx', settlement.settlementTxHash)}
+        />
+      ),
+    },
+    {
+      key: 'reward',
+      title: 'Reward Settlement',
+      subtitle: `${formatWei(settlement.rewardWei)} wei CTC credited to the operator.`,
+      complete: true,
+      provenance: rewardAccount?.provenance ?? 'recorded',
+    },
+  ];
+}
 
 function buildStages(settlement: Settlement): Stage[] {
   return [
@@ -69,9 +144,14 @@ function buildStages(settlement: Settlement): Stage[] {
 }
 
 export default async function OverviewPage() {
-  const { devices, settlements, totals, degraded } = await getLiveDashboardData();
+  const { devices, settlements, totals, rewardAccounts, degraded } = await getLiveDashboardData();
   const settlement = settlements[0] ?? RECORDED_SETTLEMENT;
+  const primaryDevice = devices[0];
+  const primaryRewardAccount = rewardAccounts.find(
+    (a) => a.operator.toLowerCase() === settlement.rewardOperator.toLowerCase(),
+  );
   const stages = buildStages(settlement);
+  const journey = primaryDevice ? buildJourney(primaryDevice, settlement, primaryRewardAccount) : [];
   const metricsLive = !degraded.creditcoin;
 
   return (
@@ -80,6 +160,19 @@ export default async function OverviewPage() {
         <p className="text-sm text-ink-muted">Good morning</p>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight text-ink-primary">Nodra Network</h1>
       </div>
+
+      {journey.length > 0 ? (
+        <Panel className="mb-6 overflow-hidden border-blue-500/20 shadow-glow">
+          <PanelHeader
+            title="NODE-001 → Reward"
+            meta="The complete verified path, in order"
+            action={<StatusBadge label="Operational" tone="ok" pulse />}
+          />
+          <div className="p-5">
+            <JourneyPipeline steps={journey} />
+          </div>
+        </Panel>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <MetricCard

@@ -3,7 +3,7 @@ import 'server-only';
 import { Contract, JsonRpcProvider, solidityPackedKeccak256, type Log } from 'ethers';
 
 import { NETWORKS } from '@/lib/protocol';
-import { RECORDED_SETTLEMENT } from '@/lib/data';
+import { DEVICES, RECORDED_SETTLEMENT } from '@/lib/data';
 import { getCreditcoinConfig, getSourceChainConfig, RPC_TIMEOUT_MS } from './config';
 import { DEVICE_REGISTRY_ABI, INCENTIVE_CONTROLLER_ABI } from './abi';
 
@@ -70,6 +70,10 @@ export interface SourceChainSnapshot {
   nextSessionId?: number;
   activityEvents?: ActivityEventDTO[];
   recordedTxConfirmed?: boolean;
+  /** True when the recorded DeviceRegistered transaction still resolves on-chain to the
+   *  expected operator. Undefined when the device has no recorded registration tx, or the
+   *  check could not be completed. */
+  registrationConfirmedLive?: boolean;
 }
 
 export interface SettlementEventDTO {
@@ -78,6 +82,7 @@ export interface SettlementEventDTO {
   operator: string;
   activityUnits: number;
   rewardWei: bigint;
+  queryId: string;
   txHash: string;
   blockNumber: number;
 }
@@ -96,6 +101,8 @@ export interface CreditcoinSnapshot {
   recordedActivitySettled?: boolean;
   settlementEvents?: SettlementEventDTO[];
   recordedTxConfirmed?: boolean;
+  /** queryId decoded from the recorded settlement transaction's own ActivitySettled log. */
+  recordedQueryId?: string;
 }
 
 export interface LiveChainSnapshot {
@@ -158,11 +165,23 @@ async function readSourceChain(deviceId: string): Promise<SourceChainSnapshot> {
     ),
   );
 
-  const [[deviceOperator], [nextSessionIdRaw], [events], [receipt]] = await Promise.all([
+  const deviceRecord = DEVICES.find((d) => d.id === deviceId);
+  const registrationReceiptP = deviceRecord?.registrationTxHash
+    ? settle(
+        withTimeout(
+          provider.getTransactionReceipt(deviceRecord.registrationTxHash),
+          RPC_TIMEOUT_MS,
+          'sepolia:getTransactionReceipt(registration)',
+        ),
+      )
+    : Promise.resolve([undefined, undefined] as const);
+
+  const [[deviceOperator], [nextSessionIdRaw], [events], [receipt], [registrationReceipt]] = await Promise.all([
     deviceOperatorP,
     nextSessionIdP,
     eventsP,
     receiptP,
+    registrationReceiptP,
   ]);
 
   const activityEvents: ActivityEventDTO[] | undefined = events
@@ -182,12 +201,36 @@ async function readSourceChain(deviceId: string): Promise<SourceChainSnapshot> {
   const recordedTxConfirmed =
     receipt?.status === 1 && receipt.blockNumber === RECORDED_SETTLEMENT.sourceBlock ? true : undefined;
 
+  // Confirm the recorded DeviceRegistered log itself resolves on-chain to the expected
+  // device/operator pair — a genuine live cross-check, not a re-derivation of anything.
+  let registrationConfirmedLive: boolean | undefined;
+  if (registrationReceipt && deviceRecord) {
+    const registeredLog = registrationReceipt.logs
+      .map((log) => {
+        try {
+          return registry.interface.parseLog(log);
+        } catch {
+          return null;
+        }
+      })
+      .find((parsed) => parsed?.name === 'DeviceRegistered');
+
+    registrationConfirmedLive =
+      registrationReceipt.status === 1 &&
+      String(registeredLog?.args.deviceId ?? '').toLowerCase() === deviceId.toLowerCase() &&
+      typeof registeredLog?.args.operator === 'string' &&
+      registeredLog.args.operator.toLowerCase() === deviceRecord.sourceOperator.toLowerCase()
+        ? true
+        : undefined;
+  }
+
   return {
     reachable: true,
     deviceOperator,
     nextSessionId: nextSessionIdRaw === undefined ? undefined : Number(nextSessionIdRaw),
     activityEvents,
     recordedTxConfirmed,
+    registrationConfirmedLive,
   };
 }
 
@@ -303,6 +346,7 @@ async function readCreditcoin(deviceId: string, sessionId: number, rewardOperato
         operator: parsed.args.operator as string,
         activityUnits: Number(parsed.args.activityUnits),
         rewardWei: parsed.args.reward as bigint,
+        queryId: parsed.args.queryId as string,
         txHash: log.transactionHash,
         blockNumber: log.blockNumber,
       };
@@ -312,6 +356,23 @@ async function readCreditcoin(deviceId: string, sessionId: number, rewardOperato
 
   const recordedTxConfirmed =
     receipt?.status === 1 && receipt.blockNumber === RECORDED_SETTLEMENT.settlementBlock ? true : undefined;
+
+  // Decode the recorded settlement transaction's own ActivitySettled log to recover its
+  // on-chain queryId, so the mapper can confirm it matches the recorded value rather than
+  // trusting it blindly.
+  let recordedQueryId: string | undefined;
+  if (receipt) {
+    const settledLog = receipt.logs
+      .map((log) => {
+        try {
+          return controller.interface.parseLog(log);
+        } catch {
+          return null;
+        }
+      })
+      .find((parsed) => parsed?.name === 'ActivitySettled');
+    recordedQueryId = settledLog ? (settledLog.args.queryId as string) : undefined;
+  }
 
   return {
     reachable: true,
@@ -327,6 +388,7 @@ async function readCreditcoin(deviceId: string, sessionId: number, rewardOperato
     recordedActivitySettled,
     settlementEvents,
     recordedTxConfirmed,
+    recordedQueryId,
   };
 }
 
