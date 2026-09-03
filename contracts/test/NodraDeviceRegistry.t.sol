@@ -71,8 +71,13 @@ contract NodraDeviceRegistryTest is Test {
     }
 
     function testReportActivity_rejectsAboveLimit() public {
+        // Read the limit BEFORE arming the cheatcodes. Solidity evaluates call arguments first, so
+        // inlining `registry.MAX_ACTIVITY_UNITS()` into the argument list would make that view call
+        // the "next call" that vm.prank/vm.expectRevert latch onto, and it returns successfully.
+        uint256 tooMany = registry.MAX_ACTIVITY_UNITS() + 1;
+
         vm.prank(operator);
         vm.expectRevert("activityUnits exceeds limit");
-        registry.reportActivity(DEVICE_ID, registry.MAX_ACTIVITY_UNITS() + 1);
+        registry.reportActivity(DEVICE_ID, tooMany);
     }
 }
