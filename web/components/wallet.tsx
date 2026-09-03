@@ -88,7 +88,12 @@ export function useWallet() {
     setState((s) => ({ ...s, address: null }));
   }, []);
 
-  /** Prompts a network switch, adding the network to the wallet first if it doesn't know it. */
+  /** Prompts a network switch, adding the network to the wallet first if it doesn't know it.
+   *  EIP-3326 defines code 4902 for "unrecognized chain", but wallets are inconsistent about
+   *  actually returning it for that case (some just throw a plain "Unrecognized chain ID ..."
+   *  error with no code, or a different one) — so rather than gate the add-chain fallback on
+   *  a specific error code, we try it after ANY switch failure except an explicit user
+   *  rejection. Adding a chain the wallet already knows is a harmless no-op per EIP-3085. */
   const ensureNetwork = useCallback(async (network: NetworkId) => {
     const eth = window.ethereum;
     if (!eth) return false;
@@ -98,27 +103,27 @@ export function useWallet() {
       return true;
     } catch (err) {
       const code = (err as { code?: number })?.code;
-      if (code === 4902) {
-        try {
-          await eth.request({
-            method: 'wallet_addEthereumChain',
-            params: [
-              {
-                chainId: params.chainIdHex,
-                chainName: params.chainName,
-                nativeCurrency: params.nativeCurrency,
-                rpcUrls: params.rpcUrls,
-              },
-            ],
-          });
-          return true;
-        } catch (addErr) {
-          setState((s) => ({ ...s, error: describeWalletError(addErr) }));
-          return false;
-        }
+      if (code === 4001) {
+        setState((s) => ({ ...s, error: describeWalletError(err) }));
+        return false;
       }
-      setState((s) => ({ ...s, error: describeWalletError(err) }));
-      return false;
+      try {
+        await eth.request({
+          method: 'wallet_addEthereumChain',
+          params: [
+            {
+              chainId: params.chainIdHex,
+              chainName: params.chainName,
+              nativeCurrency: params.nativeCurrency,
+              rpcUrls: params.rpcUrls,
+            },
+          ],
+        });
+        return true;
+      } catch (addErr) {
+        setState((s) => ({ ...s, error: describeWalletError(addErr) }));
+        return false;
+      }
     }
   }, []);
 
