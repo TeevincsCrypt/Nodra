@@ -1,0 +1,29 @@
+{
+  "name": "nodra",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "description": "Nodra — trustless cross-chain DePIN incentives, settled on Creditcoin via the Attestcoin Protocol.",
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test -vv",
+    "nodra:register_device": "tsx scripts/register_device.ts",
+    "nodra:report_activity": "tsx scripts/report_activity.ts",
+    "nodra:submit_proof": "tsx scripts/submit_proof.ts",
+    "nodra:inspect": "tsx scripts/inspect.ts",
+    "nodra:check_setup": "tsx scripts/check_setup.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@gluwa/asc-contracts": "0.2.1",
+    "@gluwa/usc-sdk": "0.18.0",
+    "@openzeppelin/contracts": "5.4.0",
+    "dotenv": "17.4.2",
+    "ethers": "^6.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.0",
+    "tsx": "^4.22.4",
+    "typescript": "5.9.2"
+  }
+}
