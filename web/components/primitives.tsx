@@ -141,6 +141,53 @@ export function ButtonLink({
   );
 }
 
+export function Button({
+  children,
+  onClick,
+  variant = 'primary',
+  disabled = false,
+  loading = false,
+  type = 'button',
+  className,
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+  variant?: 'primary' | 'secondary';
+  disabled?: boolean;
+  loading?: boolean;
+  type?: 'button' | 'submit';
+  className?: string;
+}) {
+  const base =
+    'inline-flex items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50';
+  const styles =
+    variant === 'primary'
+      ? 'bg-blue-500 text-white hover:enabled:bg-blue-400 shadow-[0_0_24px_-8px_rgba(46,124,246,0.8)] hover:enabled:shadow-[0_0_32px_-6px_rgba(46,124,246,0.9)]'
+      : 'border border-line-strong text-ink-primary hover:enabled:border-blue-500/50 hover:enabled:bg-blue-500/[0.06]';
+
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled || loading}
+      className={cn(base, styles, className)}
+    >
+      {loading ? (
+        <span className="flex gap-1" aria-hidden="true">
+          {[0, 1, 2].map((i) => (
+            <span
+              key={i}
+              className="h-1 w-1 rounded-full bg-current animate-pulse-dot"
+              style={{ animationDelay: `${i * 0.15}s` }}
+            />
+          ))}
+        </span>
+      ) : null}
+      {children}
+    </button>
+  );
+}
+
 /* ------------------------------------------------------------------ States */
 
 export function EmptyState({

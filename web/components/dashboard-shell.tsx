@@ -15,6 +15,7 @@ const NAV = [
   { href: '/dashboard/proofs', label: 'Proofs' },
   { href: '/dashboard/rewards', label: 'Rewards' },
   { href: '/dashboard/protocol', label: 'Protocol' },
+  { href: '/dashboard/register', label: 'Register a device' },
 ];
 
 function isActive(pathname: string, href: string, exact?: boolean) {

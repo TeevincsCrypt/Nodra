@@ -4,6 +4,7 @@ import { Contract, JsonRpcProvider, solidityPackedKeccak256, type Log } from 'et
 
 import { NETWORKS } from '@/lib/protocol';
 import { DEVICES, RECORDED_SETTLEMENT } from '@/lib/data';
+import { fromDeviceId } from '@/lib/device-id';
 import { getCreditcoinConfig, getSourceChainConfig, RPC_TIMEOUT_MS } from './config';
 import { DEVICE_REGISTRY_ABI, INCENTIVE_CONTROLLER_ABI } from './abi';
 
@@ -20,12 +21,12 @@ import { DEVICE_REGISTRY_ABI, INCENTIVE_CONTROLLER_ABI } from './abi';
  * already-verified transaction hashes still resolve on-chain to the values we display.
  */
 
-function describeError(err: unknown): string {
+export function describeError(err: unknown): string {
   if (err instanceof Error) return err.message.slice(0, 200);
   return String(err).slice(0, 200);
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
     promise.then(
@@ -42,7 +43,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 /** Runs `promise` to completion, converting a throw into a tuple instead of propagating it. */
-async function settle<T>(promise: Promise<T>): Promise<[T | undefined, string | undefined]> {
+export async function settle<T>(promise: Promise<T>): Promise<[T | undefined, string | undefined]> {
   try {
     return [await promise, undefined];
   } catch (err) {
@@ -50,7 +51,7 @@ async function settle<T>(promise: Promise<T>): Promise<[T | undefined, string | 
   }
 }
 
-function makeProvider(rpcUrl: string, chainId: number): JsonRpcProvider {
+export function makeProvider(rpcUrl: string, chainId: number): JsonRpcProvider {
   // staticNetwork skips ethers' automatic eth_chainId probe on first use — one fewer
   // round trip per page render, and it never has to guess the network from a slow RPC.
   return new JsonRpcProvider(rpcUrl, chainId, { staticNetwork: true });
@@ -390,6 +391,100 @@ async function readCreditcoin(deviceId: string, sessionId: number, rewardOperato
     recordedTxConfirmed,
     recordedQueryId,
   };
+}
+
+/** Light, single-purpose read used only when merging newly-discovered devices — the
+ *  full readCreditcoin() below anchors several of its checks to RECORDED_SETTLEMENT,
+ *  which doesn't apply to a device that has no settlement yet. */
+export async function readCreditcoinDeviceOperator(deviceId: string): Promise<string | undefined> {
+  const { rpcUrl, contractAddress } = getCreditcoinConfig();
+  if (!rpcUrl) return undefined;
+  const provider = makeProvider(rpcUrl, NETWORKS.creditcoin.chainId);
+  const controller = new Contract(contractAddress, INCENTIVE_CONTROLLER_ABI, provider);
+  const [operator] = await settle(
+    withTimeout(
+      controller.deviceOperator(deviceId) as Promise<string>,
+      RPC_TIMEOUT_MS,
+      'creditcoin:deviceOperator(discover)',
+    ),
+  );
+  return operator;
+}
+
+export interface DiscoveredDeviceDTO {
+  deviceId: string;
+  label: string;
+  sourceOperator: string;
+  registrationTxHash: string;
+  registrationBlock: number;
+}
+
+export interface DeviceDiscoveryResult {
+  devices: DiscoveredDeviceDTO[];
+  reachable: boolean;
+  error?: string;
+}
+
+/**
+ * Scans Sepolia for every `DeviceRegistered` event, so a device someone registers
+ * through the UI shows up on the dashboard without a code change or a database. Bounded
+ * to a rolling window rather than genesis: there is no indexer behind this, so a device
+ * registered longer ago than that window will stop appearing in this list even though
+ * its on-chain state (and its own detail page, reachable by direct URL) is unaffected.
+ * Registrations are a rare event, so this trades unlimited history for a bounded,
+ * predictable RPC cost.
+ */
+export async function discoverRegisteredDevices(): Promise<DeviceDiscoveryResult> {
+  const { rpcUrl, contractAddress } = getSourceChainConfig();
+  if (!rpcUrl) {
+    return { devices: [], reachable: false, error: 'SOURCE_CHAIN_RPC_URL is not configured.' };
+  }
+
+  const provider = makeProvider(rpcUrl, NETWORKS.sepolia.chainId);
+  const registry = new Contract(contractAddress, DEVICE_REGISTRY_ABI, provider);
+
+  const [blockNumber, blockNumberErr] = await settle(
+    withTimeout(provider.getBlockNumber(), RPC_TIMEOUT_MS, 'sepolia:getBlockNumber(discover)'),
+  );
+  if (blockNumber === undefined) {
+    return { devices: [], reachable: false, error: blockNumberErr };
+  }
+
+  const fromBlock = Math.max(0, blockNumber - LOG_LOOKBACK_BLOCKS);
+  const [events, eventsErr] = await settle(
+    withTimeout(
+      registry.queryFilter(registry.filters.DeviceRegistered(), fromBlock, blockNumber) as Promise<Log[]>,
+      RPC_TIMEOUT_MS,
+      'sepolia:queryFilter(DeviceRegistered)',
+    ),
+  );
+  if (events === undefined) {
+    return { devices: [], reachable: true, error: eventsErr };
+  }
+
+  const devices: DiscoveredDeviceDTO[] = events
+    .map((log) => {
+      const parsed = registry.interface.parseLog(log);
+      if (!parsed) return null;
+      const deviceId = parsed.args.deviceId as string;
+      let label: string;
+      try {
+        label = fromDeviceId(deviceId);
+      } catch {
+        label = deviceId;
+      }
+      if (!label) label = deviceId;
+      return {
+        deviceId,
+        label,
+        sourceOperator: parsed.args.operator as string,
+        registrationTxHash: log.transactionHash,
+        registrationBlock: log.blockNumber,
+      };
+    })
+    .filter((d): d is DiscoveredDeviceDTO => d !== null);
+
+  return { devices, reachable: true };
 }
 
 /**

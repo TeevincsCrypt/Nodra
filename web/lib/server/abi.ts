@@ -28,4 +28,9 @@ export const INCENTIVE_CONTROLLER_ABI = [
   'function totalRewardsAccrued() external view returns (uint256)',
   'function settledActivities(bytes32 activityKey) external view returns (bool)',
   'event ActivitySettled(bytes32 indexed deviceId, uint256 indexed sessionId, address indexed operator, uint256 activityUnits, uint256 reward, bytes32 queryId)',
+  // onlyOwner on-chain. Only ever called server-side, by the owner-held key in
+  // lib/server/admin-wallet.ts, after independently verifying a real Sepolia
+  // DeviceRegistered event — never in response to unverified client input.
+  'function registerDevice(bytes32 deviceId, address operator) external',
+  'event DeviceRegistered(bytes32 indexed deviceId, address indexed operator)',
 ] as const;

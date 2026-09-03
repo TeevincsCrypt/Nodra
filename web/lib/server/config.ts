@@ -44,3 +44,29 @@ export function getCreditcoinConfig(): ChainServerConfig {
 /** Per-call RPC timeout. Long enough for a slow public endpoint, short enough that a
  *  dead RPC cannot stall page generation — every call site races this against the request. */
 export const RPC_TIMEOUT_MS = 8_000;
+
+/**
+ * The private key of NodraIncentiveController's owner, used ONLY by
+ * `lib/server/registration.ts` to countersign a device's Creditcoin-side registration
+ * after independently verifying the visitor's Sepolia registration on-chain.
+ *
+ * This is the single most sensitive value in this application. It is read here and
+ * nowhere else outside `lib/server/admin-wallet.ts`; never log it, never include it in a
+ * Server Action's return value, never reference it from a Client Component (which would
+ * fail to compile anyway, since every file in lib/server/ guards itself with
+ * `import 'server-only'`).
+ *
+ * Deliberately a distinct variable name from the root repo's CLI-only
+ * CREDITCOIN_WALLET_PRIVATE_KEY (a different .env, on a machine that never deploys to
+ * Vercel) even though, today, it is the same underlying key. If you want to shrink the
+ * blast radius of holding this on a server long-term, call `transferOwnership` on
+ * NodraIncentiveController to a dedicated hot wallet used for nothing but this, and put
+ * that wallet's key here instead — onlyOwner also gates setRewardRatePerUnit, pause,
+ * unpause and setSourceDeviceRegistry, so whatever key is configured here can do all of
+ * those too; the narrowness of what actually happens comes only from this codebase only
+ * ever calling registerDevice with it, not from any on-chain restriction.
+ */
+export function getRegistrationOwnerPrivateKey(): string | null {
+  const key = process.env.CREDITCOIN_OWNER_PRIVATE_KEY?.trim();
+  return key ? key : null;
+}

@@ -12,7 +12,12 @@ import {
   type NetworkTotals,
   type RewardAccount,
 } from '@/lib/data';
-import { fetchLiveChainSnapshot, type LiveChainSnapshot } from './onchain';
+import {
+  discoverRegisteredDevices,
+  fetchLiveChainSnapshot,
+  readCreditcoinDeviceOperator,
+  type LiveChainSnapshot,
+} from './onchain';
 
 /**
  * Maps live chain reads onto the exact DTO shapes the dashboard already renders
@@ -153,24 +158,60 @@ function mapRewardAccounts(settlements: Settlement[], snapshot: LiveChainSnapsho
   return [...byOperator.values()];
 }
 
+async function loadDiscoveredDevices(): Promise<Device[]> {
+  const knownIds = new Set(DEVICES.map((d) => d.id.toLowerCase()));
+  const { devices: discovered } = await discoverRegisteredDevices();
+  const fresh = discovered.filter((d) => !knownIds.has(d.deviceId.toLowerCase()));
+  if (fresh.length === 0) return [];
+
+  const operators = await Promise.all(fresh.map((d) => readCreditcoinDeviceOperator(d.deviceId)));
+
+  return fresh.map((discoveredDevice, i): Device => {
+    const rewardOperator = operators[i];
+    const registered = isRegistered(discoveredDevice.sourceOperator) && isRegistered(rewardOperator);
+    return {
+      id: discoveredDevice.deviceId,
+      label: discoveredDevice.label,
+      kind: 'Registered device',
+      sourceNetwork: 'sepolia',
+      sourceOperator: discoveredDevice.sourceOperator,
+      rewardOperator: rewardOperator ?? ZeroAddress,
+      status: registered ? 'active' : 'idle',
+      totalActivityUnits: 0,
+      sessions: 0,
+      lastSessionId: null,
+      provenance: 'live',
+      registrationTxHash: discoveredDevice.registrationTxHash,
+      registrationConfirmedLive: true,
+    };
+  });
+}
+
 async function loadDashboardData(): Promise<LiveDashboardData> {
-  // Exactly one registered device today; fetching per-device keeps this correct if a
-  // second device is registered later, at the cost of one extra pair of RPC round trips
-  // per additional device.
-  const snapshots = await Promise.all(
-    DEVICES.map((device) => {
-      const settlement = SETTLEMENTS.find((s) => s.deviceId === device.id) ?? RECORDED_SETTLEMENT;
-      return fetchLiveChainSnapshot(device.id, settlement.sessionId, device.rewardOperator);
-    }),
-  );
+  // Exactly one baked-in device (the recorded Phase 2 settlement); fetching per-device
+  // keeps this correct as more are registered, at the cost of one extra pair of RPC round
+  // trips per additional known device. Devices registered through the UI beyond this list
+  // are found separately, by loadDiscoveredDevices() below.
+  const [snapshots, discoveredDevices] = await Promise.all([
+    Promise.all(
+      DEVICES.map((device) => {
+        const settlement = SETTLEMENTS.find((s) => s.deviceId === device.id) ?? RECORDED_SETTLEMENT;
+        return fetchLiveChainSnapshot(device.id, settlement.sessionId, device.rewardOperator);
+      }),
+    ),
+    loadDiscoveredDevices(),
+  ]);
 
   const snapshotByDeviceId = new Map(DEVICES.map((device, i) => [device.id, snapshots[i]]));
   const primarySnapshot = snapshots[0];
 
-  const devices = DEVICES.map((device) => {
-    const snapshot = snapshotByDeviceId.get(device.id);
-    return snapshot ? mapDevice(device, snapshot) : device;
-  });
+  const devices = [
+    ...DEVICES.map((device) => {
+      const snapshot = snapshotByDeviceId.get(device.id);
+      return snapshot ? mapDevice(device, snapshot) : device;
+    }),
+    ...discoveredDevices,
+  ];
 
   const settlements = SETTLEMENTS.map((settlement) => {
     const snapshot = snapshotByDeviceId.get(settlement.deviceId);

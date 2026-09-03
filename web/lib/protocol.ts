@@ -69,6 +69,38 @@ export const NETWORKS: Record<NetworkId, NetworkInfo> = {
   },
 };
 
+/**
+ * Parameters for the wallet's `wallet_switchEthereumChain` / `wallet_addEthereumChain`
+ * calls. All public: a chain id, a display name, and a public RPC endpoint a wallet can
+ * add on the user's behalf if it doesn't already know the network. Sepolia is virtually
+ * always already known to a wallet, so it only needs a switch; Creditcoin CC3 Testnet is
+ * not, so it carries the full add-network payload too. The RPC URL here is the same
+ * public default documented in `.env.example` — not a secret, and independent of
+ * whatever CREDITCOIN_RPC_URL the server is configured with for its own reads.
+ */
+export const WALLET_NETWORKS: Record<
+  NetworkId,
+  {
+    chainIdHex: string;
+    chainName: string;
+    nativeCurrency: { name: string; symbol: string; decimals: number };
+    rpcUrls: string[];
+  }
+> = {
+  sepolia: {
+    chainIdHex: '0xaa36a7',
+    chainName: 'Sepolia',
+    nativeCurrency: { name: 'Sepolia ETH', symbol: 'ETH', decimals: 18 },
+    rpcUrls: ['https://ethereum-sepolia-rpc.publicnode.com'],
+  },
+  creditcoin: {
+    chainIdHex: '0x18e8f',
+    chainName: 'Creditcoin Testnet',
+    nativeCurrency: { name: 'Creditcoin', symbol: 'CTC', decimals: 18 },
+    rpcUrls: ['https://rpc.cc3-testnet.creditcoin.network'],
+  },
+};
+
 /** Attestcoin's identifier for Sepolia on Creditcoin. Not the EVM chain id. */
 export const SOURCE_CHAIN_KEY = 1;
 
