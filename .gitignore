@@ -1,6 +1,8 @@
 node_modules/
-out/
-cache/
-lib/
+# Foundry artifacts — anchored to the repo root so they do not match
+# same-named directories inside web/ (e.g. web/lib).
+/out/
+/cache/
+/lib/
 .env
 *.log
