@@ -1,9 +1,11 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { ZeroAddress } from 'ethers';
 
 import { DataRow, TransactionHash } from '@/components/hash';
 import { ProofTimeline, type TimelineStep } from '@/components/proof-timeline';
 import { Panel, PanelHeader, ProvenanceTag, StatusBadge } from '@/components/primitives';
+import { RetryCreditcoinRegistration } from '@/components/retry-creditcoin';
 import { DEVICES } from '@/lib/data';
 import { getLiveDashboardData } from '@/lib/server/live-data';
 import { explorerUrl, formatNumber, formatWei, weiToCtc } from '@/lib/format';
@@ -31,6 +33,9 @@ export default async function DeviceDetailPage({
 
   const settlements = allSettlements.filter((s) => s.deviceId === device.id);
   const latest = settlements[0];
+
+  const creditcoinRegistered = device.rewardOperator.toLowerCase() !== ZeroAddress.toLowerCase();
+  const awaitingCreditcoin = !creditcoinRegistered && Boolean(device.registrationTxHash);
 
   const journey: TimelineStep[] = latest
     ? [
@@ -204,7 +209,17 @@ export default async function DeviceDetailPage({
                 <DataRow label="Operator (source)">
                   <TransactionHash value={device.sourceOperator} lead={6} tail={4} />
                 </DataRow>
+                <DataRow label="Creditcoin registration">
+                  {creditcoinRegistered ? (
+                    <span className="flex items-center gap-2 text-ok">Registered</span>
+                  ) : (
+                    <span className="text-warn">Pending</span>
+                  )}
+                </DataRow>
               </dl>
+              {awaitingCreditcoin && device.registrationTxHash ? (
+                <RetryCreditcoinRegistration sepoliaTxHash={device.registrationTxHash} />
+              ) : null}
             </div>
           </Panel>
         </div>
