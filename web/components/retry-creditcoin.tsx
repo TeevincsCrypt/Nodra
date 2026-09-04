@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 import { Button } from './primitives';
 import { TransactionHash } from './hash';
@@ -16,6 +17,7 @@ import { explorerUrl } from '@/lib/format';
  * Sepolia transaction hash actually says on-chain, never on anything supplied by the caller.
  */
 export function RetryCreditcoinRegistration({ sepoliaTxHash }: { sepoliaTxHash: string }) {
+  const router = useRouter();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [creditcoinTxHash, setCreditcoinTxHash] = useState<string | null>(null);
@@ -29,6 +31,10 @@ export function RetryCreditcoinRegistration({ sepoliaTxHash }: { sepoliaTxHash: 
       if (result.success) {
         setCreditcoinTxHash(result.creditcoinTxHash ?? null);
         setAlreadyRegistered(Boolean(result.alreadyRegistered));
+        // This page's surrounding data (the "Pending" label, the device's status badge) is
+        // server-rendered and has no idea this just happened — router.refresh() re-runs the
+        // server components with fresh data so it stops contradicting the message below.
+        router.refresh();
       } else {
         setError(result.error ?? 'Creditcoin registration did not complete.');
       }
@@ -54,7 +60,6 @@ export function RetryCreditcoinRegistration({ sepoliaTxHash }: { sepoliaTxHash: 
             />
           </div>
         ) : null}
-        <p className="mt-2 text-2xs text-ink-muted">This page picks it up next time its data refreshes.</p>
       </div>
     );
   }

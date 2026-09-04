@@ -1,6 +1,7 @@
 'use server';
 
 import { Contract } from 'ethers';
+import { revalidatePath } from 'next/cache';
 
 import { validateDeviceLabel, toDeviceId } from '@/lib/device-id';
 import { getCreditcoinConfig, getSourceChainConfig, RPC_TIMEOUT_MS } from './config';
@@ -182,6 +183,7 @@ export async function approveCreditcoinRegistration(sepoliaTxHash: string): Prom
     );
     const ZERO = '0x0000000000000000000000000000000000000000';
     if (existingOperator && existingOperator !== ZERO) {
+      revalidatePath('/dashboard', 'layout');
       return { success: true, alreadyRegistered: true, deviceId, operator: existingOperator };
     }
 
@@ -196,6 +198,7 @@ export async function approveCreditcoinRegistration(sepoliaTxHash: string): Prom
       return { success: false, deviceId, operator, error: 'The Creditcoin registration transaction failed.' };
     }
 
+    revalidatePath('/dashboard', 'layout');
     return { success: true, deviceId, operator, creditcoinTxHash: tx.hash };
   } catch (err) {
     return { success: false, error: describeError(err) };
