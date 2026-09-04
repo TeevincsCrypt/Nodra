@@ -12,13 +12,15 @@ import {
   type NetworkTotals,
   type RewardAccount,
 } from '@/lib/data';
-import { fromDeviceId } from '@/lib/device-id';
+import { fromDeviceId, toDeviceId } from '@/lib/device-id';
 import {
   discoverRegisteredDevices,
   discoverSettlements,
   fetchLiveChainSnapshot,
+  findRegistrationEvent,
   findSourceEvents,
   type LiveChainSnapshot,
+  type SourceEventRef,
 } from './onchain';
 
 /**
@@ -211,12 +213,54 @@ async function loadDiscoveredDevices(): Promise<Device[]> {
   });
 }
 
+/** The subset of fields both discoverSettlements()'s and readCreditcoin()'s settlement
+ *  event shapes have in common — enough to build a full Settlement record from either. */
+interface SettlementEventLike {
+  deviceId: string;
+  sessionId: number;
+  operator: string;
+  activityUnits: number;
+  rewardWei: bigint;
+  queryId: string;
+  settlementTxHash: string;
+  settlementBlock: number;
+}
+
+/** Builds a live (non-recorded) Settlement from a real ActivitySettled event plus its
+ *  matching source event. `proof` stays undefined — this dashboard never re-queries
+ *  Attestcoin's proof builder, so it only has real Merkle/continuity parameters for the
+ *  one recorded run. */
+function buildLiveSettlement(
+  event: SettlementEventLike,
+  deviceLabel: string,
+  sourceOperator: string,
+  ref: SourceEventRef,
+): Settlement {
+  return {
+    deviceId: event.deviceId,
+    deviceLabel,
+    sessionId: event.sessionId,
+    activityUnits: event.activityUnits,
+    rewardWei: event.rewardWei,
+    sourceTxHash: ref.sourceTxHash,
+    sourceBlock: ref.sourceBlock,
+    settlementTxHash: event.settlementTxHash,
+    settlementBlock: event.settlementBlock,
+    sourceOperator,
+    rewardOperator: event.operator,
+    proof: undefined,
+    queryId: event.queryId,
+    provenance: 'live',
+    sourceConfirmedLive: true,
+    settlementConfirmedLive: true,
+    queryIdConfirmedLive: true,
+  };
+}
+
 /**
  * Scans Creditcoin for every ActivitySettled event and turns any not already covered by
  * the static SETTLEMENTS list into full Settlement records, so a device's real reward
- * shows up on Activity/Rewards/Proofs without a code change. `proof` stays undefined for
- * these — this dashboard never re-queries Attestcoin's proof builder, so it only has real
- * Merkle/continuity parameters for the one recorded run.
+ * shows up on Activity/Rewards/Proofs without a code change.
  */
 async function loadDiscoveredSettlements(devices: Device[]): Promise<Settlement[]> {
   const knownPairs = new Set(SETTLEMENTS.map((s) => `${s.deviceId.toLowerCase()}:${s.sessionId}`));
@@ -245,25 +289,7 @@ async function loadDiscoveredSettlements(devices: Device[]): Promise<Settlement[
         }
       }
 
-      return {
-        deviceId: s.deviceId,
-        deviceLabel: label,
-        sessionId: s.sessionId,
-        activityUnits: s.activityUnits,
-        rewardWei: s.rewardWei,
-        sourceTxHash: ref.sourceTxHash,
-        sourceBlock: ref.sourceBlock,
-        settlementTxHash: s.settlementTxHash,
-        settlementBlock: s.settlementBlock,
-        sourceOperator: device?.sourceOperator ?? s.operator,
-        rewardOperator: s.operator,
-        proof: undefined,
-        queryId: s.queryId,
-        provenance: 'live',
-        sourceConfirmedLive: true,
-        settlementConfirmedLive: true,
-        queryIdConfirmedLive: true,
-      };
+      return buildLiveSettlement(s, label, device?.sourceOperator ?? s.operator, ref);
     })
     .filter((s): s is Settlement => s !== null);
 }
@@ -276,8 +302,11 @@ async function loadDashboardData(): Promise<LiveDashboardData> {
   const [snapshots, discoveredDevices] = await Promise.all([
     Promise.all(
       DEVICES.map((device) => {
-        const settlement = SETTLEMENTS.find((s) => s.deviceId === device.id) ?? RECORDED_SETTLEMENT;
-        return fetchLiveChainSnapshot(device.id, settlement.sessionId, device.rewardOperator);
+        // This device's own recorded settlement if it has one — never another device's,
+        // even as a fallback, so a future seed device with no matching SETTLEMENTS entry
+        // degrades to session 0 rather than silently reusing NODE-001's.
+        const sessionId = SETTLEMENTS.find((s) => s.deviceId === device.id)?.sessionId ?? 0;
+        return fetchLiveChainSnapshot(device.id, sessionId, device.rewardOperator);
       }),
     ),
     loadDiscoveredDevices(),
@@ -384,3 +413,123 @@ function mapRewardAccountsRecorded(settlements: Settlement[]): RewardAccount[] {
  * graceful per-field degradation throughout onchain.ts keep that bounded and non-fatal.
  */
 export const getLiveDashboardData = cache(loadDashboardData);
+
+export interface DeviceDetailResult {
+  device: Device | null;
+  settlements: Settlement[];
+}
+
+/**
+ * Single-device lookup for the device detail page, deliberately independent of
+ * getLiveDashboardData(). That function discovers and snapshots EVERY device to build the
+ * list pages — correct for them, but it means a page for one device was paying for every
+ * other device's data too. That was tolerable under ISR (the cost was amortised across a
+ * 30s cache window); once every dashboard page is force-dynamic (see the comment above),
+ * it's the dominant cost of visiting a single device's page, compounding with each extra
+ * device. This fetches only what the requested device's own on-chain records actually are.
+ *
+ * A known device's deviceId is exact (from lib/data.ts); an unknown label is turned into
+ * one with the same deterministic encoding the registry itself uses (lib/device-id.ts) —
+ * so this never needs to scan the full DeviceRegistered history just to resolve a label.
+ */
+export async function getDeviceDetail(label: string): Promise<DeviceDetailResult> {
+  const knownDevice = DEVICES.find((d) => d.label.toLowerCase() === label.toLowerCase());
+
+  let deviceId: string;
+  if (knownDevice) {
+    deviceId = knownDevice.id;
+  } else {
+    try {
+      deviceId = toDeviceId(label);
+    } catch {
+      return { device: null, settlements: [] };
+    }
+  }
+
+  const recordedSettlementsForDevice = SETTLEMENTS.filter((s) => s.deviceId === deviceId);
+  const anchorSessionId = recordedSettlementsForDevice[0]?.sessionId ?? 0;
+  const snapshotOperatorGuess = knownDevice?.rewardOperator ?? ZeroAddress;
+
+  const [snapshot, registrationRef] = await Promise.all([
+    fetchLiveChainSnapshot(deviceId, anchorSessionId, snapshotOperatorGuess),
+    // Known devices already carry their registration tx in lib/data.ts and get it
+    // cross-checked inside fetchLiveChainSnapshot itself — this targeted lookup is only
+    // for a device that isn't in that static list.
+    knownDevice ? Promise.resolve(undefined) : findRegistrationEvent(deviceId),
+  ]);
+
+  if (!knownDevice && !isRegistered(snapshot.source.deviceOperator)) {
+    // Never registered on Sepolia (or the RPC is unreachable and we simply can't tell) —
+    // nothing real to show for a device this dashboard has no other record of.
+    return { device: null, settlements: [] };
+  }
+
+  const device: Device = knownDevice
+    ? mapDevice(knownDevice, snapshot)
+    : {
+        id: deviceId,
+        label,
+        kind: 'Registered device',
+        sourceNetwork: 'sepolia',
+        sourceOperator: isRegistered(snapshot.source.deviceOperator) ? snapshot.source.deviceOperator : ZeroAddress,
+        rewardOperator: isRegistered(snapshot.creditcoin.deviceOperator)
+          ? snapshot.creditcoin.deviceOperator
+          : ZeroAddress,
+        status:
+          isRegistered(snapshot.source.deviceOperator) && isRegistered(snapshot.creditcoin.deviceOperator)
+            ? 'active'
+            : 'idle',
+        totalActivityUnits:
+          snapshot.source.activityEvents?.reduce((sum, e) => sum + e.activityUnits, 0) ??
+          snapshot.creditcoin.settlementEvents?.reduce((sum, e) => sum + e.activityUnits, 0) ??
+          0,
+        sessions: snapshot.source.nextSessionId ?? 0,
+        lastSessionId:
+          snapshot.source.nextSessionId !== undefined
+            ? snapshot.source.nextSessionId > 0
+              ? snapshot.source.nextSessionId - 1
+              : null
+            : null,
+        provenance: 'live',
+        registrationTxHash: registrationRef?.registrationTxHash,
+        registrationConfirmedLive: registrationRef ? true : undefined,
+      };
+
+  // Recorded settlements first (real Merkle/proof metadata), cross-checked against this
+  // live snapshot exactly like the list pages do.
+  const recordedMapped = recordedSettlementsForDevice.map((s) => mapSettlement(s, snapshot));
+
+  // Any of this device's own settlement events not already covered by a recorded record —
+  // covers a self-registered device with no recorded record at all, and equally a known
+  // device that has settled additional sessions since the one recorded here.
+  const knownSessionIds = new Set(recordedSettlementsForDevice.map((s) => s.sessionId));
+  const extraEvents = (snapshot.creditcoin.settlementEvents ?? []).filter((e) => !knownSessionIds.has(e.sessionId));
+
+  let extraSettlements: Settlement[] = [];
+  if (extraEvents.length > 0) {
+    const sourceRefs = await findSourceEvents(extraEvents.map((e) => ({ deviceId: e.deviceId, sessionId: e.sessionId })));
+    extraSettlements = extraEvents
+      .map((e): Settlement | null => {
+        const ref = sourceRefs.get(`${e.deviceId.toLowerCase()}:${e.sessionId}`);
+        if (!ref) return null;
+        return buildLiveSettlement(
+          {
+            deviceId: e.deviceId,
+            sessionId: e.sessionId,
+            operator: e.operator,
+            activityUnits: e.activityUnits,
+            rewardWei: e.rewardWei,
+            queryId: e.queryId,
+            settlementTxHash: e.txHash,
+            settlementBlock: e.blockNumber,
+          },
+          device.label,
+          device.sourceOperator,
+          ref,
+        );
+      })
+      .filter((s): s is Settlement => s !== null);
+  }
+
+  return { device, settlements: [...recordedMapped, ...extraSettlements] };
+}

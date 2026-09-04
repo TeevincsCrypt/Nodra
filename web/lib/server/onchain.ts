@@ -3,7 +3,7 @@ import 'server-only';
 import { Contract, JsonRpcProvider, solidityPackedKeccak256, type Log } from 'ethers';
 
 import { NETWORKS } from '@/lib/protocol';
-import { DEVICES, RECORDED_SETTLEMENT } from '@/lib/data';
+import { DEVICES, SETTLEMENTS } from '@/lib/data';
 import { fromDeviceId } from '@/lib/device-id';
 import { getCreditcoinConfig, getSourceChainConfig, RPC_TIMEOUT_MS } from './config';
 import { DEVICE_REGISTRY_ABI, INCENTIVE_CONTROLLER_ABI } from './abi';
@@ -165,12 +165,6 @@ async function queryLogsResilient(
   return [results.flatMap(([logs]) => logs ?? []), undefined];
 }
 
-/**
- * NOTE: the log-lookback anchor and the recorded-tx cross-check both reference
- * `RECORDED_SETTLEMENT` rather than a value scoped to `deviceId`. Correct today because
- * exactly one device (NODE-001) is registered and it IS that settlement; if a second
- * device is registered, this should be parameterised per-device rather than reused as-is.
- */
 async function readSourceChain(deviceId: string): Promise<SourceChainSnapshot> {
   const { rpcUrl, contractAddress } = getSourceChainConfig();
   if (!rpcUrl) {
@@ -194,7 +188,11 @@ async function readSourceChain(deviceId: string): Promise<SourceChainSnapshot> {
     withTimeout(registry.nextSessionId(deviceId) as Promise<bigint>, RPC_TIMEOUT_MS, 'sepolia:nextSessionId'),
   );
 
-  const fromBlock = Math.max(0, RECORDED_SETTLEMENT.sourceBlock - 1, blockNumber - LOG_LOOKBACK_BLOCKS);
+  // Scoped to THIS device's own recorded settlement, if it has one — NODE-001's genesis
+  // block has no bearing on how far back a different device's log scan needs to reach, and
+  // the tx-hash cross-check below only means anything for the settlement it's verifying.
+  const recordedForDevice = SETTLEMENTS.find((s) => s.deviceId === deviceId);
+  const fromBlock = Math.max(0, (recordedForDevice?.sourceBlock ?? 1) - 1, blockNumber - LOG_LOOKBACK_BLOCKS);
   const activityFilter = registry.filters.DeviceActivityReported(deviceId);
   const eventsP = queryLogsResilient(
     registry,
@@ -203,13 +201,15 @@ async function readSourceChain(deviceId: string): Promise<SourceChainSnapshot> {
     blockNumber,
     'sepolia:queryFilter(DeviceActivityReported)',
   );
-  const receiptP = settle(
-    withTimeout(
-      provider.getTransactionReceipt(RECORDED_SETTLEMENT.sourceTxHash),
-      RPC_TIMEOUT_MS,
-      'sepolia:getTransactionReceipt',
-    ),
-  );
+  const receiptP = recordedForDevice
+    ? settle(
+        withTimeout(
+          provider.getTransactionReceipt(recordedForDevice.sourceTxHash),
+          RPC_TIMEOUT_MS,
+          'sepolia:getTransactionReceipt',
+        ),
+      )
+    : Promise.resolve([undefined, undefined] as const);
 
   const deviceRecord = DEVICES.find((d) => d.id === deviceId);
   const registrationReceiptP = deviceRecord?.registrationTxHash
@@ -245,7 +245,9 @@ async function readSourceChain(deviceId: string): Promise<SourceChainSnapshot> {
     .sort((a, b) => b.blockNumber - a.blockNumber);
 
   const recordedTxConfirmed =
-    receipt?.status === 1 && receipt.blockNumber === RECORDED_SETTLEMENT.sourceBlock ? true : undefined;
+    recordedForDevice && receipt?.status === 1 && receipt.blockNumber === recordedForDevice.sourceBlock
+      ? true
+      : undefined;
 
   // Confirm the recorded DeviceRegistered log itself resolves on-chain to the expected
   // device/operator pair — a genuine live cross-check, not a re-derivation of anything.
@@ -288,6 +290,11 @@ async function readCreditcoin(deviceId: string, sessionId: number, rewardOperato
 
   const provider = makeProvider(rpcUrl, NETWORKS.creditcoin.chainId);
   const controller = new Contract(contractAddress, INCENTIVE_CONTROLLER_ABI, provider);
+
+  // Scoped to this exact (deviceId, sessionId)'s own recorded settlement, if it has one —
+  // see the matching comment in readSourceChain above for why this must not default to
+  // NODE-001's regardless of which device is actually being read.
+  const recordedForDevice = SETTLEMENTS.find((s) => s.deviceId === deviceId && s.sessionId === sessionId);
 
   const [blockNumber, blockNumberErr] = await settle(
     withTimeout(provider.getBlockNumber(), RPC_TIMEOUT_MS, 'creditcoin:getBlockNumber'),
@@ -339,7 +346,7 @@ async function readCreditcoin(deviceId: string, sessionId: number, rewardOperato
     ),
   );
 
-  const fromBlock = Math.max(0, RECORDED_SETTLEMENT.settlementBlock - 1, blockNumber - LOG_LOOKBACK_BLOCKS);
+  const fromBlock = Math.max(0, (recordedForDevice?.settlementBlock ?? 1) - 1, blockNumber - LOG_LOOKBACK_BLOCKS);
   const settlementFilter = controller.filters.ActivitySettled(deviceId);
   const eventsP = queryLogsResilient(
     controller,
@@ -348,13 +355,15 @@ async function readCreditcoin(deviceId: string, sessionId: number, rewardOperato
     blockNumber,
     'creditcoin:queryFilter(ActivitySettled)',
   );
-  const receiptP = settle(
-    withTimeout(
-      provider.getTransactionReceipt(RECORDED_SETTLEMENT.settlementTxHash),
-      RPC_TIMEOUT_MS,
-      'creditcoin:getTransactionReceipt',
-    ),
-  );
+  const receiptP = recordedForDevice
+    ? settle(
+        withTimeout(
+          provider.getTransactionReceipt(recordedForDevice.settlementTxHash),
+          RPC_TIMEOUT_MS,
+          'creditcoin:getTransactionReceipt',
+        ),
+      )
+    : Promise.resolve([undefined, undefined] as const);
 
   const [
     [owner],
@@ -401,7 +410,9 @@ async function readCreditcoin(deviceId: string, sessionId: number, rewardOperato
     .sort((a, b) => b.blockNumber - a.blockNumber);
 
   const recordedTxConfirmed =
-    receipt?.status === 1 && receipt.blockNumber === RECORDED_SETTLEMENT.settlementBlock ? true : undefined;
+    recordedForDevice && receipt?.status === 1 && receipt.blockNumber === recordedForDevice.settlementBlock
+      ? true
+      : undefined;
 
   // Decode the recorded settlement transaction's own ActivitySettled log to recover its
   // on-chain queryId, so the mapper can confirm it matches the recorded value rather than
@@ -634,6 +645,42 @@ export async function findSourceEvents(
   );
 
   return result;
+}
+
+export interface RegistrationEventRef {
+  registrationTxHash: string;
+  registrationBlock: number;
+}
+
+/**
+ * Precise, single-device lookup for the DeviceRegistered event that registered `deviceId` —
+ * both deviceId and operator are indexed, so this is a narrow filter, not the wide
+ * every-device scan discoverRegisteredDevices() does. Used by the device detail page, which
+ * only ever needs one device's registration record, not the whole registry's history.
+ */
+export async function findRegistrationEvent(deviceId: string): Promise<RegistrationEventRef | undefined> {
+  const { rpcUrl, contractAddress } = getSourceChainConfig();
+  if (!rpcUrl) return undefined;
+
+  const provider = makeProvider(rpcUrl, NETWORKS.sepolia.chainId);
+  const registry = new Contract(contractAddress, DEVICE_REGISTRY_ABI, provider);
+
+  const [blockNumber] = await settle(
+    withTimeout(provider.getBlockNumber(), RPC_TIMEOUT_MS, 'sepolia:getBlockNumber(findRegistrationEvent)'),
+  );
+  if (blockNumber === undefined) return undefined;
+
+  const fromBlock = Math.max(0, blockNumber - LOG_LOOKBACK_BLOCKS);
+  const [events] = await queryLogsResilient(
+    registry,
+    registry.filters.DeviceRegistered(deviceId),
+    fromBlock,
+    blockNumber,
+    'sepolia:queryFilter(DeviceRegistered,single)',
+  );
+  const log = events?.[0];
+  if (!log) return undefined;
+  return { registrationTxHash: log.transactionHash, registrationBlock: log.blockNumber };
 }
 
 /**

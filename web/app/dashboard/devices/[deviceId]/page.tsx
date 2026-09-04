@@ -6,7 +6,7 @@ import { DataRow, TransactionHash } from '@/components/hash';
 import { ProofTimeline, type TimelineStep } from '@/components/proof-timeline';
 import { Panel, PanelHeader, ProvenanceTag, StatusBadge } from '@/components/primitives';
 import { RetryCreditcoinRegistration } from '@/components/retry-creditcoin';
-import { getLiveDashboardData } from '@/lib/server/live-data';
+import { getDeviceDetail } from '@/lib/server/live-data';
 import { explorerUrl, formatNumber, formatWei, weiToCtc } from '@/lib/format';
 import { CONTRACTS, NETWORKS } from '@/lib/protocol';
 
@@ -25,11 +25,9 @@ export default async function DeviceDetailPage({
   const { deviceId } = await params;
   const label = decodeURIComponent(deviceId);
 
-  const { devices, settlements: allSettlements } = await getLiveDashboardData();
-  const device = devices.find((d) => d.label.toLowerCase() === label.toLowerCase());
+  const { device, settlements } = await getDeviceDetail(label);
   if (!device) notFound();
 
-  const settlements = allSettlements.filter((s) => s.deviceId === device.id);
   const latest = settlements[0];
 
   const creditcoinRegistered = device.rewardOperator.toLowerCase() !== ZeroAddress.toLowerCase();
