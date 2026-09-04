@@ -113,12 +113,57 @@ export interface LiveChainSnapshot {
 }
 
 /**
- * How far back a single `eth_getLogs` call is allowed to reach. Bounded so a public RPC
- * that caps log-query ranges (common on free tiers) fails one field, not the whole page.
- * The known recorded activity always sits inside this window relative to itself, so the
- * anchor block below is always covered.
+ * How far back discovery is willing to look, in total. The known recorded activity always
+ * sits inside this window relative to itself, so the anchor block below is always covered.
  */
 const LOG_LOOKBACK_BLOCKS = 50_000;
+
+/**
+ * A single `eth_getLogs` call over LOG_LOOKBACK_BLOCKS is attempted first — cheap and fast
+ * when the RPC allows it. Many public/free-tier providers cap the range far below that
+ * (sometimes as low as 2,000-10,000 blocks) and just reject anything wider, which would
+ * otherwise make every discovery query fail outright rather than merely miss old data. This
+ * is the chunk size used to retry as a fallback: small enough that essentially every known
+ * provider accepts it.
+ */
+const LOG_QUERY_FALLBACK_CHUNK_BLOCKS = 2_000;
+
+/**
+ * Queries logs over [fromBlock, toBlock], first as a single wide call, falling back to
+ * parallel smaller chunks only if that's rejected — so a provider with a narrow range cap
+ * degrades to more requests instead of finding nothing at all. One chunk failing doesn't
+ * sink the scan; its logs are just missing, same as any other partial-data degradation in
+ * this file. Returns the same [value, error] shape `settle()` does.
+ */
+async function queryLogsResilient(
+  contract: Contract,
+  filter: Parameters<Contract['queryFilter']>[0],
+  fromBlock: number,
+  toBlock: number,
+  label: string,
+): Promise<[Log[] | undefined, string | undefined]> {
+  const wide = await settle(
+    withTimeout(contract.queryFilter(filter, fromBlock, toBlock) as Promise<Log[]>, RPC_TIMEOUT_MS, label),
+  );
+  if (wide[0] !== undefined) return wide;
+  if (toBlock - fromBlock <= LOG_QUERY_FALLBACK_CHUNK_BLOCKS) return wide;
+
+  const chunks: Array<[number, number]> = [];
+  for (let start = fromBlock; start <= toBlock; start += LOG_QUERY_FALLBACK_CHUNK_BLOCKS) {
+    chunks.push([start, Math.min(start + LOG_QUERY_FALLBACK_CHUNK_BLOCKS - 1, toBlock)]);
+  }
+
+  const results = await Promise.all(
+    chunks.map(([from, to]) =>
+      settle(withTimeout(contract.queryFilter(filter, from, to) as Promise<Log[]>, RPC_TIMEOUT_MS, `${label}(chunk ${from}-${to})`)),
+    ),
+  );
+
+  const anyChunkSucceeded = results.some(([logs]) => logs !== undefined);
+  if (!anyChunkSucceeded) return [undefined, `${wide[1]} (chunked retry also failed)`];
+
+  return [results.flatMap(([logs]) => logs ?? []), undefined];
+}
 
 /**
  * NOTE: the log-lookback anchor and the recorded-tx cross-check both reference
@@ -151,12 +196,12 @@ async function readSourceChain(deviceId: string): Promise<SourceChainSnapshot> {
 
   const fromBlock = Math.max(0, RECORDED_SETTLEMENT.sourceBlock - 1, blockNumber - LOG_LOOKBACK_BLOCKS);
   const activityFilter = registry.filters.DeviceActivityReported(deviceId);
-  const eventsP = settle(
-    withTimeout(
-      registry.queryFilter(activityFilter, fromBlock, blockNumber) as Promise<Log[]>,
-      RPC_TIMEOUT_MS,
-      'sepolia:queryFilter(DeviceActivityReported)',
-    ),
+  const eventsP = queryLogsResilient(
+    registry,
+    activityFilter,
+    fromBlock,
+    blockNumber,
+    'sepolia:queryFilter(DeviceActivityReported)',
   );
   const receiptP = settle(
     withTimeout(
@@ -296,12 +341,12 @@ async function readCreditcoin(deviceId: string, sessionId: number, rewardOperato
 
   const fromBlock = Math.max(0, RECORDED_SETTLEMENT.settlementBlock - 1, blockNumber - LOG_LOOKBACK_BLOCKS);
   const settlementFilter = controller.filters.ActivitySettled(deviceId);
-  const eventsP = settle(
-    withTimeout(
-      controller.queryFilter(settlementFilter, fromBlock, blockNumber) as Promise<Log[]>,
-      RPC_TIMEOUT_MS,
-      'creditcoin:queryFilter(ActivitySettled)',
-    ),
+  const eventsP = queryLogsResilient(
+    controller,
+    settlementFilter,
+    fromBlock,
+    blockNumber,
+    'creditcoin:queryFilter(ActivitySettled)',
   );
   const receiptP = settle(
     withTimeout(
@@ -433,12 +478,12 @@ export async function discoverRegisteredDevices(): Promise<DeviceDiscoveryResult
   }
 
   const fromBlock = Math.max(0, blockNumber - LOG_LOOKBACK_BLOCKS);
-  const [events, eventsErr] = await settle(
-    withTimeout(
-      registry.queryFilter(registry.filters.DeviceRegistered(), fromBlock, blockNumber) as Promise<Log[]>,
-      RPC_TIMEOUT_MS,
-      'sepolia:queryFilter(DeviceRegistered)',
-    ),
+  const [events, eventsErr] = await queryLogsResilient(
+    registry,
+    registry.filters.DeviceRegistered(),
+    fromBlock,
+    blockNumber,
+    'sepolia:queryFilter(DeviceRegistered)',
   );
   if (events === undefined) {
     return { devices: [], reachable: true, error: eventsErr };
@@ -509,12 +554,12 @@ export async function discoverSettlements(): Promise<SettlementDiscoveryResult> 
   }
 
   const fromBlock = Math.max(0, blockNumber - LOG_LOOKBACK_BLOCKS);
-  const [events, eventsErr] = await settle(
-    withTimeout(
-      controller.queryFilter(controller.filters.ActivitySettled(), fromBlock, blockNumber) as Promise<Log[]>,
-      RPC_TIMEOUT_MS,
-      'creditcoin:queryFilter(ActivitySettled,all)',
-    ),
+  const [events, eventsErr] = await queryLogsResilient(
+    controller,
+    controller.filters.ActivitySettled(),
+    fromBlock,
+    blockNumber,
+    'creditcoin:queryFilter(ActivitySettled,all)',
   );
   if (events === undefined) {
     return { settlements: [], reachable: true, error: eventsErr };
@@ -571,16 +616,12 @@ export async function findSourceEvents(
   const fromBlock = Math.max(0, blockNumber - LOG_LOOKBACK_BLOCKS);
   await Promise.all(
     pairs.map(async ({ deviceId, sessionId }) => {
-      const [events] = await settle(
-        withTimeout(
-          registry.queryFilter(
-            registry.filters.DeviceActivityReported(deviceId, sessionId),
-            fromBlock,
-            blockNumber,
-          ) as Promise<Log[]>,
-          RPC_TIMEOUT_MS,
-          'sepolia:queryFilter(DeviceActivityReported,pair)',
-        ),
+      const [events] = await queryLogsResilient(
+        registry,
+        registry.filters.DeviceActivityReported(deviceId, sessionId),
+        fromBlock,
+        blockNumber,
+        'sepolia:queryFilter(DeviceActivityReported,pair)',
       );
       const log = events?.[0];
       if (log) {
