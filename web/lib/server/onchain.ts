@@ -393,24 +393,6 @@ async function readCreditcoin(deviceId: string, sessionId: number, rewardOperato
   };
 }
 
-/** Light, single-purpose read used only when merging newly-discovered devices — the
- *  full readCreditcoin() below anchors several of its checks to RECORDED_SETTLEMENT,
- *  which doesn't apply to a device that has no settlement yet. */
-export async function readCreditcoinDeviceOperator(deviceId: string): Promise<string | undefined> {
-  const { rpcUrl, contractAddress } = getCreditcoinConfig();
-  if (!rpcUrl) return undefined;
-  const provider = makeProvider(rpcUrl, NETWORKS.creditcoin.chainId);
-  const controller = new Contract(contractAddress, INCENTIVE_CONTROLLER_ABI, provider);
-  const [operator] = await settle(
-    withTimeout(
-      controller.deviceOperator(deviceId) as Promise<string>,
-      RPC_TIMEOUT_MS,
-      'creditcoin:deviceOperator(discover)',
-    ),
-  );
-  return operator;
-}
-
 export interface DiscoveredDeviceDTO {
   deviceId: string;
   label: string;
@@ -485,6 +467,132 @@ export async function discoverRegisteredDevices(): Promise<DeviceDiscoveryResult
     .filter((d): d is DiscoveredDeviceDTO => d !== null);
 
   return { devices, reachable: true };
+}
+
+export interface DiscoveredSettlementDTO {
+  deviceId: string;
+  sessionId: number;
+  operator: string;
+  activityUnits: number;
+  rewardWei: bigint;
+  queryId: string;
+  settlementTxHash: string;
+  settlementBlock: number;
+}
+
+export interface SettlementDiscoveryResult {
+  settlements: DiscoveredSettlementDTO[];
+  reachable: boolean;
+  error?: string;
+}
+
+/**
+ * Scans Creditcoin for every `ActivitySettled` event, across every device — not just the
+ * one baked-in recorded settlement — so any device's real, verified reward shows up on
+ * Activity/Rewards/Proofs. Same rolling-window and no-indexer tradeoffs as
+ * discoverRegisteredDevices() above.
+ */
+export async function discoverSettlements(): Promise<SettlementDiscoveryResult> {
+  const { rpcUrl, contractAddress } = getCreditcoinConfig();
+  if (!rpcUrl) {
+    return { settlements: [], reachable: false, error: 'CREDITCOIN_RPC_URL is not configured.' };
+  }
+
+  const provider = makeProvider(rpcUrl, NETWORKS.creditcoin.chainId);
+  const controller = new Contract(contractAddress, INCENTIVE_CONTROLLER_ABI, provider);
+
+  const [blockNumber, blockNumberErr] = await settle(
+    withTimeout(provider.getBlockNumber(), RPC_TIMEOUT_MS, 'creditcoin:getBlockNumber(discoverSettlements)'),
+  );
+  if (blockNumber === undefined) {
+    return { settlements: [], reachable: false, error: blockNumberErr };
+  }
+
+  const fromBlock = Math.max(0, blockNumber - LOG_LOOKBACK_BLOCKS);
+  const [events, eventsErr] = await settle(
+    withTimeout(
+      controller.queryFilter(controller.filters.ActivitySettled(), fromBlock, blockNumber) as Promise<Log[]>,
+      RPC_TIMEOUT_MS,
+      'creditcoin:queryFilter(ActivitySettled,all)',
+    ),
+  );
+  if (events === undefined) {
+    return { settlements: [], reachable: true, error: eventsErr };
+  }
+
+  const settlements: DiscoveredSettlementDTO[] = events
+    .map((log) => {
+      const parsed = controller.interface.parseLog(log);
+      if (!parsed) return null;
+      return {
+        deviceId: parsed.args.deviceId as string,
+        sessionId: Number(parsed.args.sessionId),
+        operator: parsed.args.operator as string,
+        activityUnits: Number(parsed.args.activityUnits),
+        rewardWei: parsed.args.reward as bigint,
+        queryId: parsed.args.queryId as string,
+        settlementTxHash: log.transactionHash,
+        settlementBlock: log.blockNumber,
+      };
+    })
+    .filter((s): s is DiscoveredSettlementDTO => s !== null);
+
+  return { settlements, reachable: true };
+}
+
+export interface SourceEventRef {
+  sourceTxHash: string;
+  sourceBlock: number;
+}
+
+/**
+ * Batch-resolves the Sepolia `DeviceActivityReported` log a discovered settlement points
+ * back to. Both deviceId and sessionId are indexed on that event, so each lookup is a
+ * precise, cheap filter rather than a wide scan — safe to run one per settlement in
+ * parallel. Keyed as `${deviceId}:${sessionId}` (lowercased) in the returned map.
+ */
+export async function findSourceEvents(
+  pairs: Array<{ deviceId: string; sessionId: number }>,
+): Promise<Map<string, SourceEventRef>> {
+  const result = new Map<string, SourceEventRef>();
+  if (pairs.length === 0) return result;
+
+  const { rpcUrl, contractAddress } = getSourceChainConfig();
+  if (!rpcUrl) return result;
+
+  const provider = makeProvider(rpcUrl, NETWORKS.sepolia.chainId);
+  const registry = new Contract(contractAddress, DEVICE_REGISTRY_ABI, provider);
+
+  const [blockNumber, blockNumberErr] = await settle(
+    withTimeout(provider.getBlockNumber(), RPC_TIMEOUT_MS, 'sepolia:getBlockNumber(findSourceEvents)'),
+  );
+  if (blockNumber === undefined) return result;
+
+  const fromBlock = Math.max(0, blockNumber - LOG_LOOKBACK_BLOCKS);
+  await Promise.all(
+    pairs.map(async ({ deviceId, sessionId }) => {
+      const [events] = await settle(
+        withTimeout(
+          registry.queryFilter(
+            registry.filters.DeviceActivityReported(deviceId, sessionId),
+            fromBlock,
+            blockNumber,
+          ) as Promise<Log[]>,
+          RPC_TIMEOUT_MS,
+          'sepolia:queryFilter(DeviceActivityReported,pair)',
+        ),
+      );
+      const log = events?.[0];
+      if (log) {
+        result.set(`${deviceId.toLowerCase()}:${sessionId}`, {
+          sourceTxHash: log.transactionHash,
+          sourceBlock: log.blockNumber,
+        });
+      }
+    }),
+  );
+
+  return result;
 }
 
 /**

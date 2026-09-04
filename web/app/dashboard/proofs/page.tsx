@@ -61,7 +61,9 @@ export default async function ProofsPage() {
               {
                 title: 'Merkle inclusion + continuity proof',
                 network: 'Attestcoin',
-                description: `The proof builder produced a ${proof.proof.merkleSiblings}-sibling Merkle path proving the transaction sits in that block, plus a continuity proof chaining the block back to an attested digest.`,
+                description: proof.proof
+                  ? `The proof builder produced a ${proof.proof.merkleSiblings}-sibling Merkle path proving the transaction sits in that block, plus a continuity proof chaining the block back to an attested digest.`
+                  : "Attestcoin produced a Merkle inclusion proof and a continuity proof for this exact settlement — verified on-chain by Creditcoin's own precompile, below.",
               },
               {
                 title: 'Creditcoin verification',
@@ -155,18 +157,22 @@ export default async function ProofsPage() {
                       <DataRow label="Chain key" mono>
                         {SOURCE_CHAIN_KEY}
                       </DataRow>
-                      <DataRow label="Header number" mono>
-                        {formatNumber(proof.proof.headerNumber)}
-                      </DataRow>
-                      <DataRow label="Transaction index" mono>
-                        {proof.proof.transactionIndex}
-                      </DataRow>
-                      <DataRow label="Merkle siblings" mono>
-                        {proof.proof.merkleSiblings}
-                      </DataRow>
-                      <DataRow label="Continuity roots" mono>
-                        {proof.proof.continuityRoots}
-                      </DataRow>
+                      {proof.proof ? (
+                        <>
+                          <DataRow label="Header number" mono>
+                            {formatNumber(proof.proof.headerNumber)}
+                          </DataRow>
+                          <DataRow label="Transaction index" mono>
+                            {proof.proof.transactionIndex}
+                          </DataRow>
+                          <DataRow label="Merkle siblings" mono>
+                            {proof.proof.merkleSiblings}
+                          </DataRow>
+                          <DataRow label="Continuity roots" mono>
+                            {proof.proof.continuityRoots}
+                          </DataRow>
+                        </>
+                      ) : null}
                       <DataRow label="Verifier">
                         <TransactionHash
                           value={CONTRACTS.attestcoinVerifier.address}
@@ -182,6 +188,13 @@ export default async function ProofsPage() {
                         </span>
                       </DataRow>
                     </dl>
+                    {!proof.proof ? (
+                      <p className="mt-3 text-2xs leading-relaxed text-ink-muted">
+                        Header/Merkle/continuity parameters aren&apos;t shown for this settlement —
+                        this dashboard reads the already-verified on-chain result, it never
+                        re-queries Attestcoin&apos;s proof builder.
+                      </p>
+                    ) : null}
 
                     <div className="mt-5 rounded-md border border-blue-500/25 bg-blue-500/[0.05] p-4">
                       <p className="text-xs leading-relaxed text-ink-secondary">

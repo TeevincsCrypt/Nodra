@@ -41,7 +41,9 @@ export interface Settlement {
   settlementBlock: number;
   sourceOperator: string;
   rewardOperator: string;
-  proof: ProofDetail;
+  /** Absent for a live-discovered settlement — this dashboard never re-queries Attestcoin's
+   *  proof builder, so it only has these exact parameters for the one recorded run below. */
+  proof?: ProofDetail;
   /** The queryId ASCBase computed for this proof: keccak(chainKey, blockHeight, txIndex). */
   queryId: string;
   provenance: Provenance;

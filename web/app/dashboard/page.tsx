@@ -4,7 +4,7 @@ import { TransactionHash } from '@/components/hash';
 import { MetricCard } from '@/components/metrics';
 import { JourneyPipeline, NetworkPipeline, type JourneyStep, type Stage } from '@/components/pipeline';
 import { Panel, PanelHeader, ProvenanceTag, StatusBadge } from '@/components/primitives';
-import { RECORDED_SETTLEMENT, type Device, type RewardAccount, type Settlement } from '@/lib/data';
+import { RECORDED_SETTLEMENT, type Device, type ProofDetail, type RewardAccount, type Settlement } from '@/lib/data';
 import { getLiveDashboardData } from '@/lib/server/live-data';
 import { compactWei, explorerUrl, formatNumber, formatWei, weiToCtc } from '@/lib/format';
 import { CONTRACTS, NETWORKS, SOURCE_CHAIN_KEY } from '@/lib/protocol';
@@ -15,7 +15,12 @@ export const metadata = { title: 'Overview — Nodra' };
 // live enough to feel current without hammering the RPC endpoints on every request.
 export const revalidate = 30;
 
-function buildJourney(device: Device, settlement: Settlement, rewardAccount: RewardAccount | undefined): JourneyStep[] {
+function buildJourney(
+  device: Device,
+  settlement: Settlement,
+  proof: ProofDetail,
+  rewardAccount: RewardAccount | undefined,
+): JourneyStep[] {
   return [
     {
       key: 'device',
@@ -63,7 +68,7 @@ function buildJourney(device: Device, settlement: Settlement, rewardAccount: Rew
     {
       key: 'proof',
       title: 'Proof',
-      subtitle: `Merkle inclusion (${settlement.proof.merkleSiblings} siblings) + continuity proof generated.`,
+      subtitle: `Merkle inclusion (${proof.merkleSiblings} siblings) + continuity proof generated.`,
       complete: true,
       provenance: 'recorded',
     },
@@ -90,7 +95,7 @@ function buildJourney(device: Device, settlement: Settlement, rewardAccount: Rew
   ];
 }
 
-function buildStages(settlement: Settlement): Stage[] {
+function buildStages(settlement: Settlement, proof: ProofDetail): Stage[] {
   return [
     {
       key: 'source',
@@ -111,9 +116,9 @@ function buildStages(settlement: Settlement): Stage[] {
       detail: 'Independent attestors reach consensus on the source block.',
       meta: [
         { label: 'Chain key', value: String(SOURCE_CHAIN_KEY) },
-        { label: 'Header number', value: formatNumber(settlement.proof.headerNumber) },
-        { label: 'Merkle siblings', value: String(settlement.proof.merkleSiblings) },
-        { label: 'Continuity roots', value: String(settlement.proof.continuityRoots) },
+        { label: 'Header number', value: formatNumber(proof.headerNumber) },
+        { label: 'Merkle siblings', value: String(proof.merkleSiblings) },
+        { label: 'Continuity roots', value: String(proof.continuityRoots) },
       ],
     },
     {
@@ -125,7 +130,7 @@ function buildStages(settlement: Settlement): Stage[] {
         { label: 'Verifier', value: CONTRACTS.attestcoinVerifier.address },
         { label: 'Chain ID', value: String(NETWORKS.creditcoin.chainId) },
         { label: 'Block', value: formatNumber(settlement.settlementBlock) },
-        { label: 'Tx index', value: String(settlement.proof.transactionIndex) },
+        { label: 'Tx index', value: String(proof.transactionIndex) },
       ],
     },
     {
@@ -146,12 +151,16 @@ function buildStages(settlement: Settlement): Stage[] {
 export default async function OverviewPage() {
   const { devices, settlements, totals, rewardAccounts, degraded } = await getLiveDashboardData();
   const settlement = settlements[0] ?? RECORDED_SETTLEMENT;
+  // settlements[0] is always the recorded NODE-001 entry (discovered settlements are
+  // appended after it), so this only ever falls back for the truly-empty case — but the
+  // type is Settlement[], which doesn't know that ordering guarantee, hence the ?? here.
+  const proofDetail = settlement.proof ?? RECORDED_SETTLEMENT.proof!;
   const primaryDevice = devices[0];
   const primaryRewardAccount = rewardAccounts.find(
     (a) => a.operator.toLowerCase() === settlement.rewardOperator.toLowerCase(),
   );
-  const stages = buildStages(settlement);
-  const journey = primaryDevice ? buildJourney(primaryDevice, settlement, primaryRewardAccount) : [];
+  const stages = buildStages(settlement, proofDetail);
+  const journey = primaryDevice ? buildJourney(primaryDevice, settlement, proofDetail, primaryRewardAccount) : [];
   const metricsLive = !degraded.creditcoin;
 
   return (

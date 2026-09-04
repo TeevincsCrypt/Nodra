@@ -12,10 +12,12 @@ import {
   type NetworkTotals,
   type RewardAccount,
 } from '@/lib/data';
+import { fromDeviceId } from '@/lib/device-id';
 import {
   discoverRegisteredDevices,
+  discoverSettlements,
   fetchLiveChainSnapshot,
-  readCreditcoinDeviceOperator,
+  findSourceEvents,
   type LiveChainSnapshot,
 } from './onchain';
 
@@ -134,24 +136,31 @@ function mapRewardAccounts(settlements: Settlement[], snapshot: LiveChainSnapsho
   const byOperator = new Map<string, RewardAccount>();
 
   for (const settlement of settlements) {
-    const existing = byOperator.get(settlement.rewardOperator);
-    const liveSettlementsForOperator = creditcoin.settlementEvents?.filter(
-      (e) => e.operator.toLowerCase() === settlement.rewardOperator.toLowerCase(),
-    );
+    const key = settlement.rewardOperator.toLowerCase();
+    const isThisOperator = key === RECORDED_SETTLEMENT.rewardOperator.toLowerCase();
+    // pendingRewardsWei, when it applies, is already the contract's own running total for
+    // this operator across every settlement it has — summing settlement.rewardWei on top of
+    // it as more of that operator's settlements are seen would double-count.
+    const livePending = isThisOperator ? creditcoin.pendingRewardsWei : undefined;
+    const isLive = livePending !== undefined || settlement.provenance === 'live';
 
+    const existing = byOperator.get(key);
     if (existing) {
       existing.settlements += 1;
+      if (livePending === undefined) existing.totalWei += settlement.rewardWei;
+      if (isLive) existing.provenance = 'live';
       continue;
     }
 
-    const isThisOperator = settlement.rewardOperator.toLowerCase() === RECORDED_SETTLEMENT.rewardOperator.toLowerCase();
-    const livePending = isThisOperator ? creditcoin.pendingRewardsWei : undefined;
+    const liveSettlementsForOperator = creditcoin.settlementEvents?.filter(
+      (e) => e.operator.toLowerCase() === key,
+    );
 
-    byOperator.set(settlement.rewardOperator, {
+    byOperator.set(key, {
       operator: settlement.rewardOperator,
       totalWei: livePending ?? settlement.rewardWei,
       settlements: liveSettlementsForOperator?.length || 1,
-      provenance: livePending !== undefined ? 'live' : 'recorded',
+      provenance: isLive ? 'live' : 'recorded',
     });
   }
 
@@ -164,27 +173,99 @@ async function loadDiscoveredDevices(): Promise<Device[]> {
   const fresh = discovered.filter((d) => !knownIds.has(d.deviceId.toLowerCase()));
   if (fresh.length === 0) return [];
 
-  const operators = await Promise.all(fresh.map((d) => readCreditcoinDeviceOperator(d.deviceId)));
+  // Full snapshot per device, same as a known device gets — not just its registration
+  // status — so a self-registered device's real activity/sessions show up here too,
+  // instead of being stuck at 0 forever. The rewardOperator argument only feeds this
+  // snapshot's (unused, for our purposes) pendingRewards(...) read, so sourceOperator is a
+  // safe placeholder when we don't yet know whether — or to whom — Creditcoin registered it.
+  const snapshots = await Promise.all(
+    fresh.map((d) => fetchLiveChainSnapshot(d.deviceId, 0, d.sourceOperator)),
+  );
 
   return fresh.map((discoveredDevice, i): Device => {
-    const rewardOperator = operators[i];
+    const snapshot = snapshots[i];
+    const rewardOperator = isRegistered(snapshot.creditcoin.deviceOperator)
+      ? snapshot.creditcoin.deviceOperator
+      : ZeroAddress;
     const registered = isRegistered(discoveredDevice.sourceOperator) && isRegistered(rewardOperator);
+    const liveUnits =
+      snapshot.source.activityEvents?.reduce((sum, e) => sum + e.activityUnits, 0) ??
+      snapshot.creditcoin.settlementEvents?.reduce((sum, e) => sum + e.activityUnits, 0);
+    const liveSessions = snapshot.source.nextSessionId;
+
     return {
       id: discoveredDevice.deviceId,
       label: discoveredDevice.label,
       kind: 'Registered device',
       sourceNetwork: 'sepolia',
       sourceOperator: discoveredDevice.sourceOperator,
-      rewardOperator: rewardOperator ?? ZeroAddress,
+      rewardOperator,
       status: registered ? 'active' : 'idle',
-      totalActivityUnits: 0,
-      sessions: 0,
-      lastSessionId: null,
+      totalActivityUnits: liveUnits ?? 0,
+      sessions: liveSessions ?? 0,
+      lastSessionId: liveSessions !== undefined ? (liveSessions > 0 ? liveSessions - 1 : null) : null,
       provenance: 'live',
       registrationTxHash: discoveredDevice.registrationTxHash,
       registrationConfirmedLive: true,
     };
   });
+}
+
+/**
+ * Scans Creditcoin for every ActivitySettled event and turns any not already covered by
+ * the static SETTLEMENTS list into full Settlement records, so a device's real reward
+ * shows up on Activity/Rewards/Proofs without a code change. `proof` stays undefined for
+ * these — this dashboard never re-queries Attestcoin's proof builder, so it only has real
+ * Merkle/continuity parameters for the one recorded run.
+ */
+async function loadDiscoveredSettlements(devices: Device[]): Promise<Settlement[]> {
+  const knownPairs = new Set(SETTLEMENTS.map((s) => `${s.deviceId.toLowerCase()}:${s.sessionId}`));
+  const { settlements: discovered } = await discoverSettlements();
+  const fresh = discovered.filter((s) => !knownPairs.has(`${s.deviceId.toLowerCase()}:${s.sessionId}`));
+  if (fresh.length === 0) return [];
+
+  const sourceRefs = await findSourceEvents(fresh.map((s) => ({ deviceId: s.deviceId, sessionId: s.sessionId })));
+  const deviceById = new Map(devices.map((d) => [d.id.toLowerCase(), d]));
+
+  return fresh
+    .map((s): Settlement | null => {
+      const ref = sourceRefs.get(`${s.deviceId.toLowerCase()}:${s.sessionId}`);
+      // Without the matching source event we'd have to render an empty tx hash/link —
+      // skip it rather than show something broken. Rare: it only happens if the report
+      // was further back than the rolling lookback window while the settlement wasn't.
+      if (!ref) return null;
+
+      const device = deviceById.get(s.deviceId.toLowerCase());
+      let label = device?.label;
+      if (!label) {
+        try {
+          label = fromDeviceId(s.deviceId) || s.deviceId;
+        } catch {
+          label = s.deviceId;
+        }
+      }
+
+      return {
+        deviceId: s.deviceId,
+        deviceLabel: label,
+        sessionId: s.sessionId,
+        activityUnits: s.activityUnits,
+        rewardWei: s.rewardWei,
+        sourceTxHash: ref.sourceTxHash,
+        sourceBlock: ref.sourceBlock,
+        settlementTxHash: s.settlementTxHash,
+        settlementBlock: s.settlementBlock,
+        sourceOperator: device?.sourceOperator ?? s.operator,
+        rewardOperator: s.operator,
+        proof: undefined,
+        queryId: s.queryId,
+        provenance: 'live',
+        sourceConfirmedLive: true,
+        settlementConfirmedLive: true,
+        queryIdConfirmedLive: true,
+      };
+    })
+    .filter((s): s is Settlement => s !== null);
 }
 
 async function loadDashboardData(): Promise<LiveDashboardData> {
@@ -213,10 +294,16 @@ async function loadDashboardData(): Promise<LiveDashboardData> {
     ...discoveredDevices,
   ];
 
-  const settlements = SETTLEMENTS.map((settlement) => {
-    const snapshot = snapshotByDeviceId.get(settlement.deviceId);
-    return snapshot ? mapSettlement(settlement, snapshot) : settlement;
-  });
+  // Static settlements first, so settlements[0] (the Overview page's featured "NODE-001 ->
+  // Reward" story) is always the recorded one, never whichever discovered device happened
+  // to settle most recently.
+  const settlements = [
+    ...SETTLEMENTS.map((settlement) => {
+      const snapshot = snapshotByDeviceId.get(settlement.deviceId);
+      return snapshot ? mapSettlement(settlement, snapshot) : settlement;
+    }),
+    ...(await loadDiscoveredSettlements(devices)),
+  ];
 
   const totals = primarySnapshot ? mapTotals(devices, settlements, primarySnapshot) : mapTotalsRecorded(devices, settlements);
   const rewardAccounts = primarySnapshot ? mapRewardAccounts(settlements, primarySnapshot) : mapRewardAccountsRecorded(settlements);
