@@ -7,7 +7,9 @@ import { explorerUrl } from '@/lib/format';
 import { CONTRACTS, NETWORKS, REWARD, SECURITY_PROPERTIES, SOURCE_CHAIN_KEY } from '@/lib/protocol';
 
 export const metadata = { title: 'Protocol — Nodra' };
-export const revalidate = 30;
+// See the comment on dashboard/devices/page.tsx — forced dynamic for the same reason: this
+// reads live contract state (owner, paused, rate) that must not lag behind a stale build.
+export const dynamic = 'force-dynamic';
 
 const CONTRACT_LIST = [
   { ...CONTRACTS.deviceRegistry, network: 'sepolia' as const },

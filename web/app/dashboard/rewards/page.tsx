@@ -8,7 +8,9 @@ import { explorerUrl, formatNumber, formatWei, weiToCtc } from '@/lib/format';
 import { REWARD } from '@/lib/protocol';
 
 export const metadata = { title: 'Rewards — Nodra' };
-export const revalidate = 30;
+// See the comment on dashboard/devices/page.tsx — forced dynamic so a device's freshly
+// accrued reward shows up immediately rather than only after a background ISR revalidation.
+export const dynamic = 'force-dynamic';
 
 export default async function RewardsPage() {
   const { settlements: SETTLEMENTS, totals, rewardAccounts: accounts } = await getLiveDashboardData();

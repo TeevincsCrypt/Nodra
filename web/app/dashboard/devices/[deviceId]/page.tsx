@@ -6,18 +6,16 @@ import { DataRow, TransactionHash } from '@/components/hash';
 import { ProofTimeline, type TimelineStep } from '@/components/proof-timeline';
 import { Panel, PanelHeader, ProvenanceTag, StatusBadge } from '@/components/primitives';
 import { RetryCreditcoinRegistration } from '@/components/retry-creditcoin';
-import { DEVICES } from '@/lib/data';
 import { getLiveDashboardData } from '@/lib/server/live-data';
 import { explorerUrl, formatNumber, formatWei, weiToCtc } from '@/lib/format';
 import { CONTRACTS, NETWORKS } from '@/lib/protocol';
 
-// Route generation only — the recorded device list, not a live read. Which devices EXIST
-// is a deployment-time decision, unrelated to whether their data renders live.
-export function generateStaticParams() {
-  return DEVICES.map((device) => ({ deviceId: device.label }));
-}
-
-export const revalidate = 30;
+// See the comment on dashboard/devices/page.tsx — forced dynamic so this page reflects a
+// device's current on-chain state on every visit, not a build-time (or last-revalidated)
+// snapshot. No generateStaticParams either: every device, known or newly discovered, is
+// resolved by the same fresh lookup below — there is no separate "known labels" list to
+// pre-render, and force-dynamic would bypass any such pre-render anyway.
+export const dynamic = 'force-dynamic';
 
 export default async function DeviceDetailPage({
   params,

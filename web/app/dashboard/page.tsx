@@ -11,9 +11,11 @@ import { CONTRACTS, NETWORKS, SOURCE_CHAIN_KEY } from '@/lib/protocol';
 
 export const metadata = { title: 'Overview — Nodra' };
 
-// Bakes the page at build time, then regenerates in the background at most every 30s —
-// live enough to feel current without hammering the RPC endpoints on every request.
-export const revalidate = 30;
+// Forced dynamic rather than time-based ISR: totals (device count, activity, proofs
+// verified) must reflect whatever is discoverable on-chain right now, not a snapshot from
+// the last build plus an eventual background revalidation. See the comment on
+// dashboard/devices/page.tsx for the full reasoning.
+export const dynamic = 'force-dynamic';
 
 function buildJourney(
   device: Device,

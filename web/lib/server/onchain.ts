@@ -597,9 +597,11 @@ export async function findSourceEvents(
 
 /**
  * Fetches everything the dashboard needs in one pass. Not cached at this layer — callers
- * (page components) are responsible for request-level memoisation (`react`'s `cache`) and
- * route-level revalidation (`export const revalidate`), so a single Next.js render never
- * issues the same RPC call twice and the RPC endpoints are not hit on every request.
+ * (page components) are responsible for request-level memoisation (`react`'s `cache`), so a
+ * single Next.js render never issues the same RPC call twice. Every dashboard page is
+ * `force-dynamic` (see live-data.ts), so this does run fresh on every request — accuracy
+ * (a newly discovered device must show up immediately) matters more than shaving RPC calls
+ * here, and RPC_TIMEOUT_MS plus graceful per-field degradation keep the cost bounded.
  */
 export async function fetchLiveChainSnapshot(
   deviceId: string,

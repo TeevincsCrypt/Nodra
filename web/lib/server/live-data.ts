@@ -374,7 +374,13 @@ function mapRewardAccountsRecorded(settlements: Settlement[]): RewardAccount[] {
 
 /**
  * Single entry point for every dashboard page. Cached per-request (React `cache()`) so
- * rendering the layout and the page in the same request does not double the RPC calls;
- * route-level `export const revalidate` in each page throttles calls across requests.
+ * rendering the layout and the page in the same request does not double the RPC calls.
+ *
+ * Every dashboard page sets `export const dynamic = 'force-dynamic'` rather than a
+ * time-based `revalidate` — this data reflects on-chain discovery (which devices exist,
+ * what they've done), and a device registered or settled after a page's last static build
+ * must show up on the very next request, not whenever a background ISR revalidation
+ * happens to fire. The cost is a fresh RPC round trip per page load; RPC_TIMEOUT_MS and the
+ * graceful per-field degradation throughout onchain.ts keep that bounded and non-fatal.
  */
 export const getLiveDashboardData = cache(loadDashboardData);

@@ -8,7 +8,9 @@ import { explorerUrl, formatNumber, formatWei } from '@/lib/format';
 import { NETWORKS } from '@/lib/protocol';
 
 export const metadata = { title: 'Activity — Nodra' };
-export const revalidate = 30;
+// See the comment on dashboard/devices/page.tsx — forced dynamic so a device's freshly
+// settled activity shows up immediately rather than only after a background ISR revalidation.
+export const dynamic = 'force-dynamic';
 
 export default async function ActivityPage() {
   const { settlements: SETTLEMENTS } = await getLiveDashboardData();

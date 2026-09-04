@@ -7,7 +7,9 @@ import { explorerUrl, formatNumber, formatWei } from '@/lib/format';
 import { CONTRACTS, NETWORKS, SOURCE_CHAIN_KEY } from '@/lib/protocol';
 
 export const metadata = { title: 'Proofs — Nodra' };
-export const revalidate = 30;
+// See the comment on dashboard/devices/page.tsx — forced dynamic so a device's freshly
+// verified proof shows up immediately rather than only after a background ISR revalidation.
+export const dynamic = 'force-dynamic';
 
 export default async function ProofsPage() {
   const { settlements: proofs } = await getLiveDashboardData();

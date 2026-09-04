@@ -8,7 +8,12 @@ import { formatNumber } from '@/lib/format';
 import { NETWORKS } from '@/lib/protocol';
 
 export const metadata = { title: 'Devices — Nodra' };
-export const revalidate = 30;
+// Forced dynamic rather than time-based ISR: this page lists whichever devices are
+// discoverable on-chain right now, including ones registered after the last build. A
+// static/ISR render would only ever reflect whatever was true when it was last generated
+// (build time, then a background revalidation window) — wrong for a "did my device show
+// up yet" page. See the comment on getLiveDashboardData in lib/server/live-data.ts.
+export const dynamic = 'force-dynamic';
 
 export default async function DevicesPage() {
   const { devices } = await getLiveDashboardData();
